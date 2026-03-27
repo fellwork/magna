@@ -1,0 +1,15 @@
+[package]
+name    = "fw-graph-introspect"
+description = "Postgres schema introspection via pg_catalog — discovers tables, columns, constraints, functions, and types"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+fw-graph-types = { workspace = true }
+sqlx           = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+moka           = { workspace = true }
+tokio          = { workspace = true }
+tracing        = { workspace = true }
+thiserror      = { workspace = true }
