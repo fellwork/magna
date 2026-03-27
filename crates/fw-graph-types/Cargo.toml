@@ -1,0 +1,13 @@
+[package]
+name    = "fw-graph-types"
+description = "Shared types for the fw-graph query planning engine — StepResult, PgValue, JwtClaims, errors"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+thiserror   = { workspace = true }
+indexmap     = { workspace = true }
