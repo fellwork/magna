@@ -1,4 +1,12 @@
-pub mod scalars;
+pub mod conditions;
+pub mod connections;
 pub mod enums;
-pub mod object_types;
+pub mod filters;
+pub mod functions;
+pub mod mutations;
 pub mod node_interface;
+pub mod object_types;
+pub mod order_by;
+pub mod query_root;
+pub mod relations;
+pub mod scalars;
