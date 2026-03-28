@@ -56,7 +56,8 @@ pub fn register_filter_types(
 
         // Per-column operator fields
         for col in &resource.columns {
-            let kind = classify_filter_kind(&col.gql_type);
+            let base_type = col.gql_type.trim_end_matches('!');
+            let kind = classify_filter_kind(base_type);
             let ops = operators_for_kind(kind);
 
             for op in ops {
@@ -67,10 +68,10 @@ pub fn register_filter_types(
                     InputValue::new(field_name, TypeRef::named(TypeRef::BOOLEAN))
                 } else if op == "in" {
                     // in takes a list of the column's type
-                    InputValue::new(field_name, TypeRef::named_list(&col.gql_type))
+                    InputValue::new(field_name, TypeRef::named_list(base_type))
                 } else {
                     // eq, ne, lt, etc. take the column's scalar type (nullable)
-                    InputValue::new(field_name, TypeRef::named(&col.gql_type))
+                    InputValue::new(field_name, TypeRef::named(base_type))
                 };
 
                 input = input.field(field);

@@ -21,7 +21,8 @@ pub fn register_condition_types(
 
         for col in &resource.columns {
             // All fields are nullable — conditions are optional per-column
-            let field = InputValue::new(&col.gql_name, TypeRef::named(&col.gql_type));
+            let base_type = col.gql_type.trim_end_matches('!');
+            let field = InputValue::new(&col.gql_name, TypeRef::named(base_type));
             input = input.field(field);
         }
 

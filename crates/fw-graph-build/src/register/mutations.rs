@@ -34,10 +34,11 @@ pub fn register_mutation_types(
         // CreateXInput: non-default, non-null columns are required; rest optional
         let mut create_input = InputObject::new(create_input_type_name(type_name));
         for col in &resource.columns {
+            let base_type = col.gql_type.trim_end_matches('!');
             let field_type = if col.is_not_null && !col.has_default {
-                TypeRef::named_nn(&col.gql_type)
+                TypeRef::named_nn(base_type)
             } else {
-                TypeRef::named(&col.gql_type)
+                TypeRef::named(base_type)
             };
             create_input = create_input.field(InputValue::new(&col.gql_name, field_type));
         }
@@ -64,7 +65,8 @@ pub fn register_mutation_types(
         // XPatch: all columns optional
         let mut patch = InputObject::new(patch_type_name(type_name));
         for col in &resource.columns {
-            patch = patch.field(InputValue::new(&col.gql_name, TypeRef::named(&col.gql_type)));
+            let base_type = col.gql_type.trim_end_matches('!');
+            patch = patch.field(InputValue::new(&col.gql_name, TypeRef::named(base_type)));
         }
         builder = builder.register(patch);
 

@@ -78,13 +78,15 @@ pub fn build_object_type(resource: &ResolvedResource) -> Object {
     for column in &resource.columns {
         let pg_name = column.pg_name.clone();
         let gql_name = column.gql_name.clone();
-        let gql_type = column.gql_type.clone();
         let is_not_null = column.is_not_null;
 
+        // Strip trailing "!" from gql_type — nullability is handled via named_nn.
+        let base_type = column.gql_type.trim_end_matches('!');
+
         let type_ref = if is_not_null {
-            TypeRef::named_nn(&gql_type)
+            TypeRef::named_nn(base_type)
         } else {
-            TypeRef::named(&gql_type)
+            TypeRef::named(base_type)
         };
 
         let field = Field::new(gql_name, type_ref, move |ctx| {

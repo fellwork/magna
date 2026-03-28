@@ -69,8 +69,10 @@ pub fn build_query_fields(resource: &ResolvedResource, behaviors: &BehaviorSet) 
                 .map(|c| c.gql_type.as_str())
                 .unwrap_or(TypeRef::STRING);
 
+            // Strip trailing "!" — nullability handled by named_nn
+            let base_type = gql_type.trim_end_matches('!');
             let arg_name = crate::naming::to_camel_case(pk_col);
-            field = field.argument(InputValue::new(arg_name, TypeRef::named_nn(gql_type)));
+            field = field.argument(InputValue::new(arg_name, TypeRef::named_nn(base_type)));
         }
 
         fields.push(field);
