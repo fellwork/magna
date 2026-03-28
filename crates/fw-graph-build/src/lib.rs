@@ -83,8 +83,9 @@ pub fn build_schema(
             }
         }
 
-        // Add nodeId field if the resource has a PK
-        if !resource.primary_key.is_empty() {
+        // Add nodeId field if the resource has a PK and no column already maps to "nodeId"
+        let has_node_id_column = resource.columns.iter().any(|c| c.gql_name == "nodeId");
+        if !resource.primary_key.is_empty() && !has_node_id_column {
             obj = add_node_id_field(obj, resource);
         }
 

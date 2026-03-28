@@ -3,10 +3,11 @@
 //! A condition is a simple exact-match filter: one nullable field per column.
 //! Used for exact-equality checks (as opposed to the richer XFilter types).
 
-use async_graphql::dynamic::{InputObject, InputValue, SchemaBuilder, TypeRef};
+use async_graphql::dynamic::{InputObject, InputValue, SchemaBuilder};
 
 use crate::ir::ResolvedResource;
 use crate::naming::condition_type_name;
+use crate::register::object_types::gql_type_to_type_ref;
 
 /// Register `XCondition` InputObject types for all resources.
 ///
@@ -21,8 +22,7 @@ pub fn register_condition_types(
 
         for col in &resource.columns {
             // All fields are nullable — conditions are optional per-column
-            let base_type = col.gql_type.trim_end_matches('!');
-            let field = InputValue::new(&col.gql_name, TypeRef::named(base_type));
+            let field = InputValue::new(&col.gql_name, gql_type_to_type_ref(&col.gql_type, false));
             input = input.field(field);
         }
 

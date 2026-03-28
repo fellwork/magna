@@ -71,6 +71,26 @@ pub fn register_object_types(
     builder
 }
 
+/// Convert a gql_type string (possibly with array brackets and `!` suffix) to a TypeRef.
+/// Handles: "String", "String!", "[String]", "[String]!", "[UUID]", etc.
+pub fn gql_type_to_type_ref(gql_type: &str, is_not_null: bool) -> TypeRef {
+    let base = gql_type.trim_end_matches('!');
+
+    if base.starts_with('[') && base.ends_with(']') {
+        // Array type: "[ElementType]"
+        let element = &base[1..base.len() - 1];
+        if is_not_null {
+            TypeRef::named_nn_list_nn(element)
+        } else {
+            TypeRef::named_list(element)
+        }
+    } else if is_not_null {
+        TypeRef::named_nn(base)
+    } else {
+        TypeRef::named(base)
+    }
+}
+
 /// Build a single GraphQL `Object` for a `ResolvedResource`.
 pub fn build_object_type(resource: &ResolvedResource) -> Object {
     let mut obj = Object::new(&resource.name);
@@ -80,14 +100,7 @@ pub fn build_object_type(resource: &ResolvedResource) -> Object {
         let gql_name = column.gql_name.clone();
         let is_not_null = column.is_not_null;
 
-        // Strip trailing "!" from gql_type — nullability is handled via named_nn.
-        let base_type = column.gql_type.trim_end_matches('!');
-
-        let type_ref = if is_not_null {
-            TypeRef::named_nn(base_type)
-        } else {
-            TypeRef::named(base_type)
-        };
+        let type_ref = gql_type_to_type_ref(&column.gql_type, is_not_null);
 
         let field = Field::new(gql_name, type_ref, move |ctx| {
             let pg_name = pg_name.clone();

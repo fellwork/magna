@@ -8,6 +8,7 @@ use async_graphql::dynamic::{Field, FieldFuture, InputValue, TypeRef};
 use async_graphql::Value;
 
 use crate::ir::{BehaviorSet, ResolvedResource};
+use crate::register::object_types::gql_type_to_type_ref;
 use crate::naming::{
     all_query_field_name, by_pk_query_field_name, condition_type_name, connection_type_name,
     filter_type_name, order_by_type_name,
@@ -69,10 +70,9 @@ pub fn build_query_fields(resource: &ResolvedResource, behaviors: &BehaviorSet) 
                 .map(|c| c.gql_type.as_str())
                 .unwrap_or(TypeRef::STRING);
 
-            // Strip trailing "!" — nullability handled by named_nn
-            let base_type = gql_type.trim_end_matches('!');
             let arg_name = crate::naming::to_camel_case(pk_col);
-            field = field.argument(InputValue::new(arg_name, TypeRef::named_nn(base_type)));
+            // PK args are always non-null; use gql_type_to_type_ref to handle array types
+            field = field.argument(InputValue::new(arg_name, gql_type_to_type_ref(gql_type, true)));
         }
 
         fields.push(field);

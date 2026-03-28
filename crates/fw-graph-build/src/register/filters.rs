@@ -7,6 +7,7 @@ use async_graphql::dynamic::{InputObject, InputValue, SchemaBuilder, TypeRef};
 
 use crate::ir::ResolvedResource;
 use crate::naming::filter_type_name;
+use crate::register::object_types::gql_type_to_type_ref;
 
 // ── Column type classification ────────────────────────────────────────────────
 
@@ -57,7 +58,13 @@ pub fn register_filter_types(
         // Per-column operator fields
         for col in &resource.columns {
             let base_type = col.gql_type.trim_end_matches('!');
-            let kind = classify_filter_kind(base_type);
+            // Unwrap array types like "[String]" → "String" for operator scalar args
+            let element_type = if base_type.starts_with('[') && base_type.ends_with(']') {
+                &base_type[1..base_type.len() - 1]
+            } else {
+                base_type
+            };
+            let kind = classify_filter_kind(element_type);
             let ops = operators_for_kind(kind);
 
             for op in ops {
@@ -67,11 +74,12 @@ pub fn register_filter_types(
                     // isNull takes a Boolean
                     InputValue::new(field_name, TypeRef::named(TypeRef::BOOLEAN))
                 } else if op == "in" {
-                    // in takes a list of the column's type
-                    InputValue::new(field_name, TypeRef::named_list(base_type))
+                    // in takes a list of the element type (never nested array)
+                    InputValue::new(field_name, TypeRef::named_list(element_type))
                 } else {
                     // eq, ne, lt, etc. take the column's scalar type (nullable)
-                    InputValue::new(field_name, TypeRef::named(base_type))
+                    // Use gql_type_to_type_ref to handle array columns properly
+                    InputValue::new(field_name, gql_type_to_type_ref(base_type, false))
                 };
 
                 input = input.field(field);
