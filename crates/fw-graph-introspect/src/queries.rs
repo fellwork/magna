@@ -28,7 +28,7 @@ SELECT
     c.oid::int4          AS oid,
     c.relname            AS name,
     c.relnamespace::int4 AS schema_oid,
-    c.relkind            AS kind,
+    c.relkind::text      AS kind,
     c.relrowsecurity     AS is_rls_enabled
 FROM pg_catalog.pg_class c
 WHERE c.relnamespace = ANY(
@@ -70,12 +70,12 @@ SELECT
     con.oid::int4           AS oid,
     con.conname             AS name,
     con.conrelid::int4      AS class_oid,
-    con.contype             AS kind,
+    con.contype::text       AS kind,
     con.conkey              AS key_attrs,
     con.confrelid::int4     AS foreign_class_oid,
     con.confkey             AS foreign_key_attrs,
-    con.confdeltype         AS on_delete,
-    con.confupdtype         AS on_update
+    con.confdeltype::text   AS on_delete,
+    con.confupdtype::text   AS on_update
 FROM pg_catalog.pg_constraint con
 JOIN pg_catalog.pg_class c ON c.oid = con.conrelid
 WHERE c.relnamespace = ANY(
@@ -93,11 +93,11 @@ SELECT
     p.oid::int4           AS oid,
     p.proname             AS name,
     p.pronamespace::int4  AS schema_oid,
-    p.proargtypes::int4[] AS arg_types,
+    COALESCE(ARRAY(SELECT unnest(p.proargtypes)::int4), ARRAY[]::int4[]) AS arg_types,
     p.prorettype::int4    AS return_type,
     p.proretset           AS returns_set,
     p.proisstrict         AS is_strict,
-    p.provolatile         AS volatility,
+    p.provolatile::text   AS volatility,
     l.lanname             AS language
 FROM pg_catalog.pg_proc p
 JOIN pg_catalog.pg_language l ON l.oid = p.prolang
@@ -116,7 +116,7 @@ SELECT
     t.oid::int4            AS oid,
     t.typname              AS name,
     t.typnamespace::int4   AS schema_oid,
-    t.typcategory          AS category,
+    t.typcategory::text    AS category,
     t.typelem::int4        AS array_element_type_oid,
     t.typbasetype::int4    AS base_type_oid,
     t.typrelid::int4       AS class_oid,
@@ -152,7 +152,7 @@ pub const QUERY_INDEXES: &str = r#"
 SELECT
     i.indexrelid::int4  AS index_oid,
     i.indrelid::int4    AS class_oid,
-    i.indkey::int2[]    AS key_attrs,
+    COALESCE(ARRAY(SELECT unnest(i.indkey)::int2), ARRAY[]::int2[]) AS key_attrs,
     i.indisunique       AS is_unique,
     i.indisprimary      AS is_primary
 FROM pg_catalog.pg_index i
