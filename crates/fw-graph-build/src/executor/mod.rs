@@ -12,11 +12,34 @@ use fw_graph_types::{JwtClaims, PgRow, PgValue};
 use fw_graph_sql::{SqlBuilder, SqlFragment};
 use sqlx::{pool::PoolConnection, PgPool, Postgres};
 
+use sqlx::PgConnection;
+
 use crate::executor::args::{ConnectionArgs, FilterOp, OrderDirection, QueryError};
 use crate::executor::cursor::{decode_cursor, encode_cursor};
 use crate::executor::sql_bridge::execute_on_conn;
 use crate::ir::ResolvedResource;
-use fw_graph_serv::rls::apply_rls_context;
+
+// ── RLS helper ────────────────────────────────────────────────────────────────
+
+/// Apply JWT claims as Postgres session configuration for RLS.
+/// Mirrors fw-graph-serv's apply_rls_context but lives here to avoid circular deps.
+async fn apply_rls_context(conn: &mut PgConnection, claims: &JwtClaims) -> Result<(), sqlx::Error> {
+    let claims_json = serde_json::to_string(&claims.raw).unwrap_or_default();
+    let sub_str = claims.sub.to_string();
+    let role_str = claims.role.as_str().to_owned();
+    sqlx::query(
+        "SELECT \
+            set_config('request.jwt.claims', $1, true), \
+            set_config('request.jwt.sub', $2, true), \
+            set_config('role', $3, true)",
+    )
+    .bind(&claims_json)
+    .bind(&sub_str)
+    .bind(&role_str)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
 
 // ── ConnectionResult ──────────────────────────────────────────────────────────
 

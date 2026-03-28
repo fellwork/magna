@@ -1,4 +1,4 @@
-//! GraphQL HTTP handler and playground endpoint.
+//! GraphQL HTTP handler — creates per-request RLS connection and playground.
 
 use crate::jwt::{decode_jwt, extract_bearer_token};
 use crate::state::AppState;
@@ -9,26 +9,24 @@ use axum::{
     http::HeaderMap,
     response::IntoResponse,
 };
+use fw_graph_build::executor::RequestConnection;
 
 /// Main GraphQL POST handler.
 ///
 /// Flow:
-/// 1. Extract the `Authorization` header and strip the `Bearer ` prefix.
-/// 2. Decode and validate the JWT (unauthenticated requests get anon claims).
-/// 3. Fetch the current schema generation from the registry.
-/// 4. Execute the GraphQL request with the decoded claims as data.
+/// 1. Extract Authorization header, decode JWT.
+/// 2. Acquire a connection from pool and apply RLS context → RequestConnection.
+/// 3. Execute GraphQL request with both claims and RequestConnection as data.
 pub async fn graphql_handler(
     State(state): State<AppState>,
     headers: HeaderMap,
     req: GraphQLRequest,
 ) -> GraphQLResponse {
-    // --- 1. Extract bearer token ---
     let auth_header = headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok());
     let token = extract_bearer_token(auth_header);
 
-    // --- 2. Decode JWT ---
     let claims = match decode_jwt(token, &state.jwt_secret, state.default_role.as_deref()) {
         Ok(c) => c,
         Err(e) => {
@@ -39,11 +37,24 @@ pub async fn graphql_handler(
         }
     };
 
-    // --- 3. Get current schema ---
+    // Acquire per-request connection with RLS applied.
+    let req_conn = match RequestConnection::new(&state.pool, &claims).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to acquire RLS connection");
+            return async_graphql::Response::from_errors(vec![
+                async_graphql::ServerError::new("Database connection failed", None),
+            ])
+            .into();
+        }
+    };
+
     let schema_gen = state.schema_registry.current_schema().await;
 
-    // --- 4. Execute with claims as data ---
-    let inner_req = req.into_inner().data(claims);
+    let inner_req = req.into_inner()
+        .data(claims)
+        .data(req_conn);
+
     schema_gen.schema.execute(inner_req).await.into()
 }
 

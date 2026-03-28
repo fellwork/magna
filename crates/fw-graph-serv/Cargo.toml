@@ -7,6 +7,7 @@ edition = "2021"
 fw-graph-types  = { path = "../fw-graph-types" }
 fw-graph-core   = { path = "../fw-graph-core" }
 fw-graph-config = { path = "../fw-graph-config" }
+fw-graph-build  = { path = "../fw-graph-build" }
 axum            = { workspace = true }
 tokio           = { workspace = true }
 tower           = { workspace = true }
