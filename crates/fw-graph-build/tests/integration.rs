@@ -174,7 +174,7 @@ async fn test_gather_from_local_supabase() {
 
 #[tokio::test]
 async fn test_build_schema_from_local_supabase() {
-    let (_pool, _intro, output) = match setup().await {
+    let (pool, _intro, output) = match setup().await {
         Some(s) => s,
         None => {
             eprintln!("SKIP: local Supabase not reachable");
@@ -182,7 +182,7 @@ async fn test_build_schema_from_local_supabase() {
         }
     };
 
-    let schema = build_schema(&output, &output.behaviors);
+    let schema = build_schema(&output, &output.behaviors, pool.clone());
     assert!(schema.is_ok(), "Schema build failed: {:?}", schema.err());
 
     let schema = schema.unwrap();
@@ -228,7 +228,7 @@ async fn test_build_schema_from_local_supabase() {
 
 #[tokio::test]
 async fn test_schema_sdl_stats() {
-    let (_pool, _intro, output) = match setup().await {
+    let (pool, _intro, output) = match setup().await {
         Some(s) => s,
         None => {
             eprintln!("SKIP: local Supabase not reachable");
@@ -236,7 +236,7 @@ async fn test_schema_sdl_stats() {
         }
     };
 
-    let schema = build_schema(&output, &output.behaviors).unwrap();
+    let schema = build_schema(&output, &output.behaviors, pool.clone()).unwrap();
     let sdl = schema.sdl();
 
     // Count types, queries, mutations
@@ -261,7 +261,7 @@ async fn test_schema_sdl_stats() {
 
 #[tokio::test]
 async fn test_execute_introspection_query() {
-    let (_pool, _intro, output) = match setup().await {
+    let (pool, _intro, output) = match setup().await {
         Some(s) => s,
         None => {
             eprintln!("SKIP: local Supabase not reachable");
@@ -269,7 +269,7 @@ async fn test_execute_introspection_query() {
         }
     };
 
-    let schema = build_schema(&output, &output.behaviors).unwrap();
+    let schema = build_schema(&output, &output.behaviors, pool.clone()).unwrap();
 
     // Execute a standard introspection query
     let query = r#"{ __schema { queryType { name } mutationType { name } types { name } } }"#;

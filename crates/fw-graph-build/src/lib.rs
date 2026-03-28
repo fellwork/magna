@@ -20,21 +20,27 @@ pub use plan_resolver::PlanContext;
 pub use union_step::{PgUnionStep, TaggedRow};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_graphql::dynamic::{Field, FieldFuture, Object, Schema};
 use async_graphql::Value;
+use sqlx::PgPool;
+
+use executor::QueryExecutor;
+use executor::dataloader::DataLoaderRegistry;
+use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
+use resolve::query::{build_allx_resolver, build_by_pk_resolver};
+use resolve::relation::{build_belongs_to_resolver, build_has_many_resolver};
 
 use register::conditions::register_condition_types;
 use register::connections::{register_connection_types, register_page_info};
 use register::enums::register_enums;
 use register::filters::register_filter_types;
 use register::functions::build_function_fields;
-use register::mutations::{add_mutation_fields, register_mutation_types};
+use register::mutations::register_mutation_types;
 use register::node_interface::{add_node_id_field, register_node_interface};
 use register::object_types::build_object_type;
 use register::order_by::register_order_by_types;
-use register::query_root::build_query_fields;
-use register::relations::build_relation_fields;
 use register::scalars::register_scalars;
 
 /// Build a complete GraphQL schema from gathered introspection output.
@@ -44,11 +50,16 @@ use register::scalars::register_scalars;
 pub fn build_schema(
     output: &GatherOutput,
     behaviors: &HashMap<String, BehaviorSet>,
+    pool: PgPool,
 ) -> Result<Schema, BuildError> {
     // 1. Determine if we need a Mutation root.
     let has_mutations = behaviors.values().any(|bs| {
         bs.has(BehaviorSet::INSERT) || bs.has(BehaviorSet::UPDATE) || bs.has(BehaviorSet::DELETE)
     });
+
+    // Create executor and DataLoader registry (shared across all resolvers).
+    let executor = Arc::new(QueryExecutor::new(pool.clone()));
+    let mut registry = DataLoaderRegistry::new();
 
     let mutation_name: Option<&str> = if has_mutations { Some("Mutation") } else { None };
 
@@ -63,7 +74,58 @@ pub fn build_schema(
 
     // 5. Build object types, add relation fields + nodeId, then register
     //    We must build all objects, add relation fields and nodeId BEFORE registering.
-    let relation_fields = build_relation_fields(&output.relations, &output.resources);
+    //    Use real DataLoader-backed resolver factories instead of stub closures.
+    let mut resolved_relation_fields: Vec<(String, Field)> = Vec::new();
+    for rel in &output.relations {
+        let source_res = output.resources.iter().find(|r| r.name == rel.source_resource);
+        let target_res = output.resources.iter().find(|r| r.name == rel.target_resource);
+        if let (Some(src), Some(tgt)) = (source_res, target_res) {
+            // BelongsTo field on source type.
+            let (type_name, field) = build_belongs_to_resolver(rel, src, tgt);
+            resolved_relation_fields.push((type_name, field));
+
+            if !rel.is_unique {
+                // HasMany field on target type.
+                let fk_col = rel.source_columns.first().cloned().unwrap_or_default();
+                let fk_oid = src
+                    .columns
+                    .iter()
+                    .find(|c| c.pg_name == fk_col)
+                    .map(|c| c.type_oid)
+                    .unwrap_or(25);
+                let has_many_key = format!("{}:{}", src.name, fk_col);
+                registry.register_has_many(
+                    &has_many_key,
+                    executor.clone(),
+                    src.clone(),
+                    fk_col,
+                    fk_oid,
+                    None,
+                );
+                let (type_name, field) = build_has_many_resolver(rel, src, tgt);
+                resolved_relation_fields.push((type_name, field));
+            }
+
+            // BelongsTo DataLoader.
+            let pk_col = tgt.primary_key.first().cloned().unwrap_or_default();
+            let pk_oid = tgt
+                .columns
+                .iter()
+                .find(|c| c.pg_name == pk_col)
+                .map(|c| c.type_oid)
+                .unwrap_or(25);
+            let belongs_to_key = format!("{}:{}", tgt.name, pk_col);
+            registry.register_belongs_to(
+                &belongs_to_key,
+                executor.clone(),
+                tgt.clone(),
+                pk_col,
+                pk_oid,
+                None,
+            );
+        }
+    }
+    let relation_fields = resolved_relation_fields;
 
     // Group relation fields by target type name
     let mut relation_fields_by_type: HashMap<String, Vec<Field>> = HashMap::new();
@@ -148,27 +210,37 @@ pub fn build_schema(
     // 11. Register condition types for all resources
     builder = register_condition_types(builder, &output.resources);
 
-    // 12. Build Query root fields
+    // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
         let bs = behaviors.get(&resource.name).copied().unwrap_or_else(BehaviorSet::none);
-        let fields = build_query_fields(resource, &bs);
-        for field in fields {
-            query = query.field(field);
+        if bs.has(BehaviorSet::CONNECTION) {
+            query = query.field(build_allx_resolver(resource, executor.clone()));
+        }
+        if bs.has(BehaviorSet::SELECT_ONE) {
+            query = query.field(build_by_pk_resolver(resource, executor.clone()));
         }
     }
 
-    // 13. Build Mutation root
+    // 13. Build Mutation root using real resolver factories.
     if has_mutations {
         let mut mutation = Object::new("Mutation");
 
         for resource in &output.resources {
             let bs = behaviors.get(&resource.name).copied().unwrap_or_else(BehaviorSet::none);
 
-            // Register mutation input/payload types
+            // Register input/payload types (still needed for schema type registration).
             builder = register_mutation_types(builder, resource, &bs);
 
-            // Add mutation fields to the Mutation object
-            mutation = add_mutation_fields(mutation, resource, &bs);
+            // Add real mutation resolver fields.
+            if bs.has(BehaviorSet::INSERT) {
+                mutation = mutation.field(build_create_resolver(resource, executor.clone()));
+            }
+            if bs.has(BehaviorSet::UPDATE) {
+                mutation = mutation.field(build_update_resolver(resource, executor.clone()));
+            }
+            if bs.has(BehaviorSet::DELETE) {
+                mutation = mutation.field(build_delete_resolver(resource, executor.clone()));
+            }
         }
 
         // 14. Register function fields (mutation portion)
@@ -189,7 +261,12 @@ pub fn build_schema(
     // 15. Register Query object
     builder = builder.register(query);
 
-    // 16. Apply limits and finish
+    // 16. Store executor and DataLoaderRegistry as schema data for resolvers.
+    let registry = Arc::new(registry);
+    builder = builder.data(registry);
+    builder = builder.data(executor);
+
+    // 17. Apply limits and finish
     builder = builder.limit_complexity(200).limit_depth(10);
 
     builder
@@ -206,6 +283,13 @@ mod integration_tests {
         ForeignKeyAction, IntrospectionResult, PgAttribute, PgClass, PgClassKind,
         PgConstraint, PgConstraintKind, PgDescription, PgNamespace,
     };
+
+    fn test_pool() -> sqlx::PgPool {
+        sqlx::PgPool::connect_lazy(
+            "postgresql://postgres:postgres@127.0.0.1:54322/postgres",
+        )
+        .unwrap()
+    }
 
     /// Minimal test introspection: "public" schema with users + posts tables
     /// and a posts.author_id -> users.id FK.
@@ -343,26 +427,26 @@ mod integration_tests {
         PgResourceRegistry::from_introspection(introspection)
     }
 
-    #[test]
-    fn test_full_schema_builds_from_introspection() {
+    #[tokio::test]
+    async fn test_full_schema_builds_from_introspection() {
         let intro = make_introspection();
         let preset = make_preset();
         let registry = make_registry(&intro);
 
         let output = gather(&intro, &registry, &preset).expect("gather failed");
-        let result = build_schema(&output, &output.behaviors);
+        let result = build_schema(&output, &output.behaviors, test_pool());
 
         assert!(result.is_ok(), "build_schema should succeed: {:?}", result.err());
     }
 
-    #[test]
-    fn test_schema_sdl_contains_expected_types() {
+    #[tokio::test]
+    async fn test_schema_sdl_contains_expected_types() {
         let intro = make_introspection();
         let preset = make_preset();
         let registry = make_registry(&intro);
 
         let output = gather(&intro, &registry, &preset).expect("gather failed");
-        let schema = build_schema(&output, &output.behaviors).expect("build_schema failed");
+        let schema = build_schema(&output, &output.behaviors, test_pool()).expect("build_schema failed");
 
         let sdl = schema.sdl();
 
