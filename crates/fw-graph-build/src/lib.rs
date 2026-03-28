@@ -3,6 +3,7 @@ pub mod gather;
 pub mod ir;
 pub mod naming;
 pub mod plan_resolver;
+pub mod register;
 pub mod smart_tags;
 pub mod type_map;
 pub mod union_step;
