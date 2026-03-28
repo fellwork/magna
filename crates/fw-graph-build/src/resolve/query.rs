@@ -8,7 +8,10 @@ use fw_graph_types::PgValue;
 use crate::executor::args::{ConnectionArgs, gql_value_to_pg_value};
 use crate::executor::{ConnectionResult, QueryExecutor, RequestConnection};
 use crate::ir::ResolvedResource;
-use crate::naming::{all_query_field_name, by_pk_query_field_name, connection_type_name, to_camel_case};
+use crate::naming::{
+    all_query_field_name, by_pk_query_field_name, condition_type_name, connection_type_name,
+    filter_type_name, order_by_type_name, to_camel_case,
+};
 use crate::register::connections::{ConnectionData, PageInfoData};
 use crate::register::object_types::gql_type_to_type_ref;
 
@@ -17,6 +20,9 @@ use crate::register::object_types::gql_type_to_type_ref;
 pub fn build_allx_resolver(resource: &ResolvedResource, executor: Arc<QueryExecutor>) -> Field {
     let field_name = all_query_field_name(&resource.name);
     let conn_type = connection_type_name(&resource.name);
+    let filter_type = filter_type_name(&resource.name);
+    let order_by_type = order_by_type_name(&resource.name);
+    let condition_type = condition_type_name(&resource.name);
     let resource = resource.clone();
 
     Field::new(field_name, TypeRef::named(&conn_type), move |ctx| {
@@ -48,6 +54,13 @@ pub fn build_allx_resolver(resource: &ResolvedResource, executor: Arc<QueryExecu
             Ok(Some(FieldValue::owned_any(data)))
         })
     })
+    .argument(InputValue::new("first", TypeRef::named(TypeRef::INT)))
+    .argument(InputValue::new("last", TypeRef::named(TypeRef::INT)))
+    .argument(InputValue::new("after", TypeRef::named("Cursor")))
+    .argument(InputValue::new("before", TypeRef::named("Cursor")))
+    .argument(InputValue::new("filter", TypeRef::named(filter_type)))
+    .argument(InputValue::new("orderBy", TypeRef::named_list(order_by_type)))
+    .argument(InputValue::new("condition", TypeRef::named(condition_type)))
 }
 
 /// Build the `xById(pkCol: Type!) → X` resolver field.

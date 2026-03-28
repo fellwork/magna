@@ -9,6 +9,7 @@
 use fw_graph_build::{gather, build_schema, BehaviorSet, GatherOutput, ResourceKind};
 use fw_graph_dataplan::PgResourceRegistry;
 use fw_graph_introspect::{introspect, IntrospectionResult};
+use fw_graph_types::{JwtClaims, JwtRole};
 
 const DATABASE_URL: &str = "postgresql://postgres:postgres@127.0.0.1:54322/postgres";
 
@@ -290,4 +291,126 @@ async fn test_execute_introspection_query() {
 
     // Verify we got data back
     assert!(json.is_object(), "Response data should be an object");
+}
+
+// ─── Resolver Execution Tests ────────────────────────────────────
+
+fn anon_claims() -> JwtClaims {
+    JwtClaims {
+        sub: uuid::Uuid::nil(),
+        role: JwtRole::Authenticated,
+        email: None,
+        exp: 9_999_999_999,
+        raw: serde_json::json!({
+            "sub": "00000000-0000-0000-0000-000000000000",
+            "role": "authenticated",
+            "exp": 9_999_999_999_i64
+        }),
+    }
+}
+
+/// Run a real allX query and verify rows come back with no errors.
+#[tokio::test]
+async fn test_allx_query_returns_rows() {
+    let pool = match connect().await {
+        Some(p) => p,
+        None => {
+            eprintln!("SKIP: local Supabase not reachable");
+            return;
+        }
+    };
+
+    let intro = introspect(&pool, &["public"]).await.expect("introspection failed");
+    let registry = PgResourceRegistry::from_introspection(&intro);
+    let preset = fw_graph_config::Preset {
+        pg_schemas: vec!["public".into()],
+        ..fw_graph_config::Preset::default()
+    };
+    let output = gather(&intro, &registry, &preset).expect("gather failed");
+    let schema = build_schema(&output, &output.behaviors, pool.clone()).expect("build_schema failed");
+
+    let resource_name = output.resources.first().expect("at least one resource");
+    let field_name = fw_graph_build::naming::all_query_field_name(&resource_name.name);
+
+    let query_str = format!(
+        "{{ {}(first: 5) {{ nodes {{ nodeId }} }} }}",
+        field_name
+    );
+
+    let claims = anon_claims();
+    let req_conn = fw_graph_build::executor::RequestConnection::new(&pool, &claims)
+        .await
+        .expect("RequestConnection::new failed");
+
+    let request = async_graphql::Request::new(query_str)
+        .data(claims)
+        .data(req_conn);
+
+    let response = schema.execute(request).await;
+    assert!(
+        response.errors.is_empty(),
+        "allX query should have no errors: {:?}",
+        response.errors
+    );
+    let json = serde_json::to_value(response.data).unwrap();
+    assert!(json.is_object(), "response data should be an object");
+    println!("allX response: {}", serde_json::to_string_pretty(&json).unwrap_or_default());
+}
+
+/// Run a real xById query and verify it doesn't crash (null for non-existent ID is fine).
+#[tokio::test]
+async fn test_by_pk_query_no_crash() {
+    let pool = match connect().await {
+        Some(p) => p,
+        None => {
+            eprintln!("SKIP: local Supabase not reachable");
+            return;
+        }
+    };
+
+    let intro = introspect(&pool, &["public"]).await.expect("introspection failed");
+    let registry = PgResourceRegistry::from_introspection(&intro);
+    let preset = fw_graph_config::Preset {
+        pg_schemas: vec!["public".into()],
+        ..fw_graph_config::Preset::default()
+    };
+    let output = gather(&intro, &registry, &preset).expect("gather failed");
+    let schema = build_schema(&output, &output.behaviors, pool.clone()).expect("build_schema failed");
+
+    // Find a resource with a single UUID PK.
+    let resource = output.resources.iter().find(|r| {
+        r.primary_key.len() == 1
+            && r.columns.iter().any(|c| c.pg_name == r.primary_key[0] && c.type_oid == 2950)
+    });
+    let resource = match resource {
+        Some(r) => r,
+        None => {
+            eprintln!("SKIP: no single-UUID-PK resource found");
+            return;
+        }
+    };
+
+    let field_name = fw_graph_build::naming::by_pk_query_field_name(&resource.name);
+    let pk_arg = fw_graph_build::naming::to_camel_case(&resource.primary_key[0]);
+    let query_str = format!(
+        r#"{{ {}({}:"00000000-0000-0000-0000-000000000000") {{ nodeId }} }}"#,
+        field_name, pk_arg
+    );
+
+    let claims = anon_claims();
+    let req_conn = fw_graph_build::executor::RequestConnection::new(&pool, &claims)
+        .await
+        .expect("RequestConnection::new failed");
+
+    let request = async_graphql::Request::new(query_str)
+        .data(claims)
+        .data(req_conn);
+
+    let response = schema.execute(request).await;
+    assert!(
+        response.errors.is_empty(),
+        "byId query should not error: {:?}",
+        response.errors
+    );
+    println!("byId response: {:?}", response.data);
 }
