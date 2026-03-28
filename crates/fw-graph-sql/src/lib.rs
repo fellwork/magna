@@ -22,8 +22,14 @@
 pub mod fragment;
 pub mod builder;
 pub mod render;
+pub mod insert_builder;
+pub mod update_builder;
+pub mod delete_builder;
 
 // Re-export the most commonly used types at crate root for convenience.
 pub use fragment::{SqlFragment, SqlPart, raw, param, ident, qualified_ident};
 pub use builder::{SqlBuilder, JoinType, JoinClause};
 pub use render::{render, render_fragment, debug_format};
+pub use insert_builder::InsertBuilder;
+pub use update_builder::UpdateBuilder;
+pub use delete_builder::DeleteBuilder;
