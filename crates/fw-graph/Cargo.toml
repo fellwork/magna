@@ -1,0 +1,28 @@
+[package]
+name    = "fw-graph"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fw-graph"
+path = "src/main.rs"
+
+[dependencies]
+fw-graph-types         = { path = "../fw-graph-types" }
+fw-graph-core          = { path = "../fw-graph-core" }
+fw-graph-sql           = { path = "../fw-graph-sql" }
+fw-graph-introspect    = { path = "../fw-graph-introspect" }
+fw-graph-dataplan      = { path = "../fw-graph-dataplan" }
+fw-graph-config        = { path = "../fw-graph-config" }
+fw-graph-build         = { path = "../fw-graph-build" }
+fw-graph-serv          = { path = "../fw-graph-serv" }
+fw-graph-subscriptions = { path = "../fw-graph-subscriptions" }
+axum                   = { workspace = true }
+tokio                  = { workspace = true }
+sqlx                   = { workspace = true }
+serde                  = { workspace = true }
+serde_json             = { workspace = true }
+tracing                = { workspace = true }
+tracing-subscriber     = { workspace = true }
+clap                   = { workspace = true }
+dotenvy                = { workspace = true }
