@@ -1,0 +1,24 @@
+[package]
+name    = "fw-graph-serv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fw-graph-types  = { path = "../fw-graph-types" }
+fw-graph-core   = { path = "../fw-graph-core" }
+fw-graph-config = { path = "../fw-graph-config" }
+axum            = { workspace = true }
+tokio           = { workspace = true }
+tower           = { workspace = true }
+tower-http      = { workspace = true }
+async-graphql   = { workspace = true }
+async-graphql-axum = { workspace = true }
+sqlx            = { workspace = true }
+jsonwebtoken    = { workspace = true }
+dashmap         = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+uuid            = { workspace = true }
+chrono          = { workspace = true }
+tracing         = { workspace = true }
+thiserror       = { workspace = true }
