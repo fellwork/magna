@@ -39,15 +39,19 @@ impl PlanCache {
             return Arc::clone(&existing);
         }
 
-        // Evict if at capacity — collect the key first to drop the iterator
-        // before mutating, avoiding a DashMap deadlock.
+        // Evict if at capacity. We use retain() to remove exactly one entry
+        // rather than iter() + remove(), because DashMap's iter() can hold
+        // shard locks that deadlock with a subsequent remove() on Windows.
         if self.inner.len() >= self.max_size && self.max_size > 0 {
-            let first_key: Option<OperationHash> = {
-                self.inner.iter().next().map(|e| *e.key())
-            };
-            if let Some(k) = first_key {
-                self.inner.remove(&k);
-            }
+            let mut evicted = false;
+            self.inner.retain(|_, _| {
+                if evicted {
+                    true // keep
+                } else {
+                    evicted = true;
+                    false // remove this one
+                }
+            });
         }
 
         let plan = Arc::new(build());
