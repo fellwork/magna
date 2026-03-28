@@ -29,7 +29,7 @@ pub mod codec;
 pub mod registry;
 pub mod steps;
 
-pub use codec::{PgCodec, default_codecs};
+pub use codec::{PgCodec, decode_row, default_codecs};
 pub use registry::{PgResource, PgResourceRegistry};
 pub use steps::pg_select::PgSelectStep;
 pub use steps::pg_insert::PgInsertStep;
