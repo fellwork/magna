@@ -28,6 +28,7 @@ use sqlx::PgPool;
 
 use executor::QueryExecutor;
 use executor::dataloader::DataLoaderRegistry;
+use resolve::alignment::{build_passage_alignment_resolver, register_alignment_types};
 use resolve::graph::{
     build_concept_thread_resolver, build_related_verses_resolver, build_verse_context_resolver,
     register_graph_types,
@@ -214,8 +215,9 @@ pub fn build_schema(
     // 11. Register condition types for all resources
     builder = register_condition_types(builder, &output.resources);
 
-    // 11b. Register custom graph output types (ConceptEdge, VerseXref, VerseContext)
+    // 11b. Register custom graph output types (ConceptEdge, VerseXref, VerseContext, AlignedClause)
     builder = register_graph_types(builder);
+    builder = register_alignment_types(builder);
 
     // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
@@ -228,10 +230,11 @@ pub fn build_schema(
         }
     }
 
-    // 12b. Register concept-graph traversal fields
+    // 12b. Register concept-graph traversal and alignment fields
     query = query.field(build_concept_thread_resolver(executor.clone()));
     query = query.field(build_related_verses_resolver(executor.clone()));
     query = query.field(build_verse_context_resolver(executor.clone()));
+    query = query.field(build_passage_alignment_resolver(executor.clone()));
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {
