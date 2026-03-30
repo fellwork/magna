@@ -28,6 +28,10 @@ use sqlx::PgPool;
 
 use executor::QueryExecutor;
 use executor::dataloader::DataLoaderRegistry;
+use resolve::graph::{
+    build_concept_thread_resolver, build_related_verses_resolver, build_verse_context_resolver,
+    register_graph_types,
+};
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
 use resolve::relation::{build_belongs_to_resolver, build_has_many_resolver};
@@ -210,6 +214,9 @@ pub fn build_schema(
     // 11. Register condition types for all resources
     builder = register_condition_types(builder, &output.resources);
 
+    // 11b. Register custom graph output types (ConceptEdge, VerseXref, VerseContext)
+    builder = register_graph_types(builder);
+
     // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
         let bs = behaviors.get(&resource.name).copied().unwrap_or_else(BehaviorSet::none);
@@ -220,6 +227,11 @@ pub fn build_schema(
             query = query.field(build_by_pk_resolver(resource, executor.clone()));
         }
     }
+
+    // 12b. Register concept-graph traversal fields
+    query = query.field(build_concept_thread_resolver(executor.clone()));
+    query = query.field(build_related_verses_resolver(executor.clone()));
+    query = query.field(build_verse_context_resolver(executor.clone()));
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {
