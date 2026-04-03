@@ -34,7 +34,7 @@ use resolve::graph::{
     register_graph_types,
 };
 use resolve::reader::{
-    depth_insights_field, pericope_context_field, register_reader_types,
+    concept_alignments_field, depth_insights_field, pericope_context_field, register_reader_types,
 };
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
@@ -239,6 +239,7 @@ pub fn build_schema(
     query = query.field(build_related_verses_resolver(executor.clone()));
     query = query.field(build_verse_context_resolver(executor.clone()));
     query = query.field(build_passage_alignment_resolver(executor.clone()));
+    query = query.field(concept_alignments_field(executor.clone()));
     query = query.field(depth_insights_field(executor.clone()));
     query = query.field(pericope_context_field(executor.clone()));
 
