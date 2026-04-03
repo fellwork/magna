@@ -33,6 +33,9 @@ use resolve::graph::{
     build_concept_thread_resolver, build_related_verses_resolver, build_verse_context_resolver,
     register_graph_types,
 };
+use resolve::reader::{
+    depth_insights_field, pericope_context_field, register_reader_types,
+};
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
 use resolve::relation::{build_belongs_to_resolver, build_has_many_resolver};
@@ -218,6 +221,7 @@ pub fn build_schema(
     // 11b. Register custom graph output types (ConceptEdge, VerseXref, VerseContext, AlignedClause)
     builder = register_graph_types(builder);
     builder = register_alignment_types(builder);
+    builder = register_reader_types(builder);
 
     // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
@@ -235,6 +239,8 @@ pub fn build_schema(
     query = query.field(build_related_verses_resolver(executor.clone()));
     query = query.field(build_verse_context_resolver(executor.clone()));
     query = query.field(build_passage_alignment_resolver(executor.clone()));
+    query = query.field(depth_insights_field(executor.clone()));
+    query = query.field(pericope_context_field(executor.clone()));
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {
