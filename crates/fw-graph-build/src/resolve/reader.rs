@@ -1,5 +1,8 @@
 //! Custom resolver factories for the concept reader.
 //!
+//! * `conceptAlignments(book: String!, chapter: Int!): [ConceptAlignment!]!`
+//!   — Enriched concept alignments for a chapter (alignment + concept data joined).
+//!
 //! * `depthInsights(book: String!, chapter: Int!): [DepthInsight!]!`
 //!   — Depth insights for a chapter from `depth_insights` + `depth_insight_links`.
 //!
@@ -28,6 +31,28 @@ pub struct DepthInsight {
     pub related_concept_ids: Vec<String>,
     pub related_passage_refs: Vec<String>,
     pub confidence: f64,
+}
+
+/// An enriched concept alignment: alignment fields + joined concept data.
+#[derive(Clone)]
+pub struct ConceptAlignment {
+    pub id: String,
+    pub passage_ref: String,
+    pub concept_id: String,
+    pub english_span: String,
+    pub verse: i64,
+    pub role: Option<String>,
+    pub alignment_note: Option<String>,
+    pub confidence: f64,
+    pub token_surface_forms: Vec<String>,
+    // Joined from concepts table
+    pub lemma: String,
+    pub language: String,
+    pub transliteration: String,
+    pub strongs_display: String,
+    pub semantic_range: Vec<String>,
+    pub theological_note: Option<String>,
+    pub occurrence_count: i64,
 }
 
 /// A pericope (reading unit) that covers part of a chapter.
