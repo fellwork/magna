@@ -399,13 +399,13 @@ pub fn pericope_context_field(_executor: Arc<QueryExecutor>) -> Field {
 
 // ── SQL helpers ──────────────────────────────────────────────────────────────
 
-/// Fetch depth insights for a chapter, including cross-linked insights.
+/// Fetch depth insights for a chapter using atomic columns + bridge tables.
 async fn fetch_depth_insights(
     conn: &RequestConnection,
     book: &str,
     chapter: i64,
 ) -> Result<Vec<DepthInsight>, async_graphql::Error> {
-    let prefix = format!("{}.{}.", book, chapter);
+    let like_pattern = format!("{}.{}.", book, chapter);
 
     let sql = r#"
 SELECT
@@ -414,23 +414,31 @@ SELECT
   di.insight_type,
   di.title,
   di.body,
-  di.related_concept_ids::text[] AS related_concept_ids,
-  di.related_passage_refs,
+  COALESCE(
+    (SELECT array_agg(dic.concept_id::text) FROM depth_insight_concepts dic WHERE dic.insight_id = di.id),
+    ARRAY[]::text[]
+  ) AS related_concept_ids,
+  COALESCE(
+    (SELECT array_agg(dil.linked_passage_ref) FROM depth_insight_links dil WHERE dil.insight_id = di.id),
+    ARRAY[]::text[]
+  ) AS related_passage_refs,
   di.confidence
 FROM depth_insights di
-WHERE di.passage_ref LIKE $1
+WHERE (di.book = $1 AND di.chapter = $2)
    OR EXISTS (
      SELECT 1 FROM depth_insight_links dil
      WHERE dil.insight_id = di.id
-       AND dil.linked_passage_ref LIKE $1
+       AND dil.linked_passage_ref LIKE $3
    )
-ORDER BY di.insight_type, di.passage_ref
+ORDER BY di.confidence DESC, di.passage_ref
 "#;
 
-    let like_pattern = format!("{}%", prefix);
-
     let rows = conn
-        .execute(sql, &[PgValue::Text(like_pattern)])
+        .execute(sql, &[
+            PgValue::Text(book.to_owned()),
+            PgValue::Int(chapter),
+            PgValue::Text(format!("{}%", like_pattern)),
+        ])
         .await
         .map_err(|e| async_graphql::Error::new(format!("depth_insights query failed: {e}")))?;
 
@@ -460,26 +468,22 @@ async fn fetch_pericope_context(
     book: &str,
     chapter: i64,
 ) -> Result<Vec<PericopeUnit>, async_graphql::Error> {
-    let prefix = format!("{}.{}.", book, chapter);
-
     let sql = r#"
 SELECT
   pu.id::text,
-  pu.title,
-  pu.start_ref,
-  pu.end_ref,
-  pu.genre,
-  pu.structure_note,
-  pu.anchor_concept_id::text
+  pu.pericope_title AS title,
+  pu.book || '.' || pu.chapter_start || '.' || pu.verse_start AS start_ref,
+  pu.book || '.' || pu.chapter_end || '.' || COALESCE(pu.verse_end, pu.verse_start) AS end_ref,
+  NULL::text AS genre,
+  NULL::text AS structure_note,
+  NULL::text AS anchor_concept_id
 FROM pericope_units pu
-WHERE pu.start_ref LIKE $1
-ORDER BY pu.start_ref
+WHERE pu.book = $1 AND pu.chapter_start = $2
+ORDER BY pu.sort_order, pu.verse_start
 "#;
 
-    let like_pattern = format!("{}%", prefix);
-
     let rows = conn
-        .execute(sql, &[PgValue::Text(like_pattern)])
+        .execute(sql, &[PgValue::Text(book.to_owned()), PgValue::Int(chapter)])
         .await
         .map_err(|e| async_graphql::Error::new(format!("pericope_context query failed: {e}")))?;
 
@@ -497,21 +501,19 @@ ORDER BY pu.start_ref
         .collect())
 }
 
-/// Fetch enriched concept alignments for a chapter.
+/// Fetch enriched concept alignments for a chapter using atomic columns.
 async fn fetch_concept_alignments(
     conn: &RequestConnection,
     book: &str,
     chapter: i64,
 ) -> Result<Vec<ConceptAlignment>, async_graphql::Error> {
-    let prefix = format!("{}.{}.", book, chapter);
-
     let sql = r#"
 SELECT
   ca.id::text,
   ca.passage_ref,
   ca.concept_id::text,
   ca.english_span,
-  ca.verse,
+  ca.verse_start,
   ca.role,
   ca.alignment_note,
   ca.confidence,
@@ -525,14 +527,12 @@ SELECT
   COALESCE(c.occurrence_count, 0) AS occurrence_count
 FROM concept_alignments ca
 JOIN concepts c ON c.id = ca.concept_id
-WHERE ca.passage_ref LIKE $1
-ORDER BY ca.verse, ca.english_token_start
+WHERE ca.book = $1 AND ca.chapter = $2
+ORDER BY ca.verse_start, ca.english_span
 "#;
 
-    let like_pattern = format!("{}%", prefix);
-
     let rows = conn
-        .execute(sql, &[PgValue::Text(like_pattern)])
+        .execute(sql, &[PgValue::Text(book.to_owned()), PgValue::Int(chapter)])
         .await
         .map_err(|e| async_graphql::Error::new(format!("concept_alignments query failed: {e}")))?;
 
@@ -556,7 +556,7 @@ ORDER BY ca.verse, ca.english_token_start
                 passage_ref:         text_col(&row, "passage_ref"),
                 concept_id:          text_col(&row, "concept_id"),
                 english_span:        text_col(&row, "english_span"),
-                verse:               int_col(&row, "verse"),
+                verse:               int_col(&row, "verse_start"),
                 role:                opt_text_col(&row, "role"),
                 alignment_note:      opt_text_col(&row, "alignment_note"),
                 confidence:          float_col(&row, "confidence"),
