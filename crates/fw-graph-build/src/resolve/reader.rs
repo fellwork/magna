@@ -67,6 +67,14 @@ pub struct PericopeUnit {
     pub anchor_concept_id: Option<String>,
 }
 
+/// Discovery heat score for a concept in a passage (from materialized view).
+#[derive(Clone)]
+pub struct DiscoveryHeat {
+    pub concept_id: String,
+    pub heat: f64,
+    pub event_count: i64,
+}
+
 // ── Type registration ─────────────────────────────────────────────────────────
 
 /// Register `ConceptAlignment`, `DepthInsight` and `PericopeUnit` object types.
@@ -278,10 +286,31 @@ pub fn register_reader_types(
             })
         }));
 
+    let discovery_heat = Object::new("DiscoveryHeat")
+        .field(Field::new("conceptId", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let h = ctx.parent_value.try_downcast_ref::<DiscoveryHeat>()?;
+                Ok(Some(FieldValue::value(h.concept_id.clone())))
+            })
+        }))
+        .field(Field::new("heat", TypeRef::named_nn(TypeRef::FLOAT), |ctx| {
+            FieldFuture::new(async move {
+                let h = ctx.parent_value.try_downcast_ref::<DiscoveryHeat>()?;
+                Ok(Some(FieldValue::value(h.heat)))
+            })
+        }))
+        .field(Field::new("eventCount", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let h = ctx.parent_value.try_downcast_ref::<DiscoveryHeat>()?;
+                Ok(Some(FieldValue::value(h.event_count)))
+            })
+        }));
+
     builder
         .register(concept_alignment)
         .register(depth_insight)
         .register(pericope_unit)
+        .register(discovery_heat)
 }
 
 // ── conceptAlignments resolver ───────────────────────────────────────────────
@@ -397,7 +426,72 @@ pub fn pericope_context_field(_executor: Arc<QueryExecutor>) -> Field {
     .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
 }
 
+// ── discoveryHeat resolver ──────────────────────────────────────────────────
+
+/// Build `discoveryHeat(book: String!, chapter: Int!): [DiscoveryHeat!]!`
+///
+/// Returns heat scores from the `discovery_heat` materialized view for a chapter.
+pub fn discovery_heat_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "discoveryHeat",
+        TypeRef::named_nn_list_nn("DiscoveryHeat"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let conn = ctx
+                    .data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
+                    .to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+
+                let heats = fetch_discovery_heat(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = heats.into_iter().map(FieldValue::owned_any).collect();
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
 // ── SQL helpers ──────────────────────────────────────────────────────────────
+
+/// Fetch discovery heat scores for a chapter from the materialized view.
+async fn fetch_discovery_heat(
+    conn: &RequestConnection,
+    book: &str,
+    chapter: i64,
+) -> Result<Vec<DiscoveryHeat>, async_graphql::Error> {
+    let prefix = format!("{}.{}.", book, chapter);
+
+    let sql = r#"
+SELECT
+  dh.concept_id::text,
+  dh.heat,
+  dh.event_count
+FROM discovery_heat dh
+WHERE dh.passage_ref LIKE $1
+ORDER BY dh.heat DESC
+"#;
+
+    let like_pattern = format!("{}%", prefix);
+    let rows = conn
+        .execute(sql, &[PgValue::Text(like_pattern)])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("discovery_heat query failed: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| DiscoveryHeat {
+            concept_id:  text_col(&row, "concept_id"),
+            heat:        float_col(&row, "heat"),
+            event_count: int_col(&row, "event_count"),
+        })
+        .collect())
+}
 
 /// Fetch depth insights for a chapter using atomic columns + bridge tables.
 async fn fetch_depth_insights(
