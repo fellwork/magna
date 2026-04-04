@@ -474,10 +474,12 @@ SELECT
   pu.pericope_title AS title,
   pu.book || '.' || pu.chapter_start || '.' || pu.verse_start AS start_ref,
   pu.book || '.' || pu.chapter_end || '.' || COALESCE(pu.verse_end, pu.verse_start) AS end_ref,
-  NULL::text AS genre,
+  bg.primary_genre AS genre,
   NULL::text AS structure_note,
   NULL::text AS anchor_concept_id
 FROM pericope_units pu
+LEFT JOIN book_genre_assignments bga ON bga.book = pu.book AND bga.is_primary = true
+LEFT JOIN book_genres bg ON bg.id = bga.genre_id
 WHERE pu.book = $1 AND pu.chapter_start = $2
 ORDER BY pu.sort_order, pu.verse_start
 "#;
