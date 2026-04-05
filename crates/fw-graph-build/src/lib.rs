@@ -34,7 +34,9 @@ use resolve::graph::{
     register_graph_types,
 };
 use resolve::reader::{
-    concept_alignments_field, depth_insights_field, discovery_heat_field, pericope_context_field, register_reader_types,
+    concept_alignments_field, depth_insights_field, discovery_heat_field,
+    genre_sections_field, literary_context_field, literary_structures_field,
+    main_ideas_field, pericope_context_field, register_reader_types,
 };
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
@@ -243,6 +245,10 @@ pub fn build_schema(
     query = query.field(depth_insights_field(executor.clone()));
     query = query.field(pericope_context_field(executor.clone()));
     query = query.field(discovery_heat_field(executor.clone()));
+    query = query.field(genre_sections_field(executor.clone()));
+    query = query.field(literary_structures_field(executor.clone()));
+    query = query.field(main_ideas_field(executor.clone()));
+    query = query.field(literary_context_field(executor.clone()));
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {

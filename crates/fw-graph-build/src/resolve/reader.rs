@@ -75,6 +75,50 @@ pub struct DiscoveryHeat {
     pub event_count: i64,
 }
 
+/// A genre section — verse-range structural identity within a chapter.
+#[derive(Clone)]
+pub struct GenreSection {
+    pub verse_start: i64,
+    pub verse_end: i64,
+    pub genre: String,
+    pub sub_type: Option<String>,
+}
+
+/// A commentary main idea — single-sentence pericope summary (ZECNT).
+#[derive(Clone)]
+pub struct MainIdea {
+    pub id: String,
+    pub book: String,
+    pub verse_start: String,
+    pub verse_end: String,
+    pub main_idea: String,
+    pub series: String,
+}
+
+/// Literary context analysis for a pericope.
+#[derive(Clone)]
+pub struct LiteraryContext {
+    pub id: String,
+    pub book: String,
+    pub verse_start: String,
+    pub verse_end: String,
+    pub context_prose: String,    // JSON array as string
+    pub scripture_refs: String,   // JSON array as string
+    pub series: String,
+}
+
+/// A literary structure — chiasm, acrostic, inclusio spanning a verse range.
+#[derive(Clone)]
+pub struct LiteraryStructure {
+    pub structure_type: String,
+    pub title: Option<String>,
+    pub verse_start: i64,
+    pub verse_end: i64,
+    pub pairs: String,       // JSON string
+    pub center_ref: Option<String>,
+    pub source: String,
+}
+
 // ── Type registration ─────────────────────────────────────────────────────────
 
 /// Register `ConceptAlignment`, `DepthInsight` and `PericopeUnit` object types.
@@ -306,11 +350,167 @@ pub fn register_reader_types(
             })
         }));
 
+    let genre_section = Object::new("GenreSection")
+        .field(Field::new("verseStart", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let g = ctx.parent_value.try_downcast_ref::<GenreSection>()?;
+                Ok(Some(FieldValue::value(g.verse_start)))
+            })
+        }))
+        .field(Field::new("verseEnd", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let g = ctx.parent_value.try_downcast_ref::<GenreSection>()?;
+                Ok(Some(FieldValue::value(g.verse_end)))
+            })
+        }))
+        .field(Field::new("genre", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let g = ctx.parent_value.try_downcast_ref::<GenreSection>()?;
+                Ok(Some(FieldValue::value(g.genre.clone())))
+            })
+        }))
+        .field(Field::new("subType", TypeRef::named(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let g = ctx.parent_value.try_downcast_ref::<GenreSection>()?;
+                Ok(g.sub_type.clone().map(FieldValue::value))
+            })
+        }));
+
+    let literary_structure = Object::new("LiteraryStructure")
+        .field(Field::new("structureType", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(Some(FieldValue::value(s.structure_type.clone())))
+            })
+        }))
+        .field(Field::new("title", TypeRef::named(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(s.title.clone().map(FieldValue::value))
+            })
+        }))
+        .field(Field::new("verseStart", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(Some(FieldValue::value(s.verse_start)))
+            })
+        }))
+        .field(Field::new("verseEnd", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(Some(FieldValue::value(s.verse_end)))
+            })
+        }))
+        .field(Field::new("pairs", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(Some(FieldValue::value(s.pairs.clone())))
+            })
+        }))
+        .field(Field::new("centerRef", TypeRef::named(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(s.center_ref.clone().map(FieldValue::value))
+            })
+        }))
+        .field(Field::new("source", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let s = ctx.parent_value.try_downcast_ref::<LiteraryStructure>()?;
+                Ok(Some(FieldValue::value(s.source.clone())))
+            })
+        }));
+
     builder
         .register(concept_alignment)
         .register(depth_insight)
         .register(pericope_unit)
         .register(discovery_heat)
+        .register(genre_section)
+        .register(literary_structure)
+        .register({
+            Object::new("MainIdea")
+                .field(Field::new("id", TypeRef::named_nn(TypeRef::ID), |ctx| {
+                    FieldFuture::new(async move {
+                        let m = ctx.parent_value.try_downcast_ref::<MainIdea>()?;
+                        Ok(Some(FieldValue::value(m.id.clone())))
+                    })
+                }))
+                .field(Field::new("book", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let m = ctx.parent_value.try_downcast_ref::<MainIdea>()?;
+                        Ok(Some(FieldValue::value(m.book.clone())))
+                    })
+                }))
+                .field(Field::new("verseStart", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let m = ctx.parent_value.try_downcast_ref::<MainIdea>()?;
+                        Ok(Some(FieldValue::value(m.verse_start.clone())))
+                    })
+                }))
+                .field(Field::new("verseEnd", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let m = ctx.parent_value.try_downcast_ref::<MainIdea>()?;
+                        Ok(Some(FieldValue::value(m.verse_end.clone())))
+                    })
+                }))
+                .field(Field::new("mainIdea", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let m = ctx.parent_value.try_downcast_ref::<MainIdea>()?;
+                        Ok(Some(FieldValue::value(m.main_idea.clone())))
+                    })
+                }))
+                .field(Field::new("series", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let m = ctx.parent_value.try_downcast_ref::<MainIdea>()?;
+                        Ok(Some(FieldValue::value(m.series.clone())))
+                    })
+                }))
+        })
+        .register({
+            Object::new("LiteraryContext")
+                .field(Field::new("id", TypeRef::named_nn(TypeRef::ID), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.id.clone())))
+                    })
+                }))
+                .field(Field::new("book", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.book.clone())))
+                    })
+                }))
+                .field(Field::new("verseStart", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.verse_start.clone())))
+                    })
+                }))
+                .field(Field::new("verseEnd", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.verse_end.clone())))
+                    })
+                }))
+                .field(Field::new("contextProse", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.context_prose.clone())))
+                    })
+                }))
+                .field(Field::new("scriptureRefs", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.scripture_refs.clone())))
+                    })
+                }))
+                .field(Field::new("series", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
+                        Ok(Some(FieldValue::value(l.series.clone())))
+                    })
+                }))
+        })
 }
 
 // ── conceptAlignments resolver ───────────────────────────────────────────────
@@ -457,7 +657,120 @@ pub fn discovery_heat_field(_executor: Arc<QueryExecutor>) -> Field {
     .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
 }
 
+// ── genreSections resolver ──────────────────────────────────────────────────
+
+/// Build `genreSections(book: String!, chapter: Int!): [GenreSection!]!`
+pub fn genre_sections_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "genreSections",
+        TypeRef::named_nn_list_nn("GenreSection"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let conn = ctx
+                    .data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
+                    .to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+                let sections = fetch_genre_sections(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = sections.into_iter().map(FieldValue::owned_any).collect();
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
+// ── literaryStructures resolver ─────────────────────────────────────────────
+
+/// Build `literaryStructures(book: String!, chapter: Int!): [LiteraryStructure!]!`
+pub fn literary_structures_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "literaryStructures",
+        TypeRef::named_nn_list_nn("LiteraryStructure"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let conn = ctx
+                    .data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
+                    .to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+                let structures = fetch_literary_structures(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = structures.into_iter().map(FieldValue::owned_any).collect();
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
 // ── SQL helpers ──────────────────────────────────────────────────────────────
+
+/// Fetch genre sections for a chapter.
+async fn fetch_genre_sections(
+    conn: &RequestConnection,
+    book: &str,
+    chapter: i64,
+) -> Result<Vec<GenreSection>, async_graphql::Error> {
+    let sql = r#"
+SELECT verse_start, verse_end, genre, sub_type
+FROM genre_sections
+WHERE book = $1 AND chapter = $2
+ORDER BY verse_start
+"#;
+    let rows = conn
+        .execute(sql, &[PgValue::Text(book.to_owned()), PgValue::Int(chapter)])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("genre_sections query failed: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| GenreSection {
+            verse_start: int_col(&row, "verse_start"),
+            verse_end:   int_col(&row, "verse_end"),
+            genre:       text_col(&row, "genre"),
+            sub_type:    opt_text_col(&row, "sub_type"),
+        })
+        .collect())
+}
+
+/// Fetch literary structures for a chapter.
+async fn fetch_literary_structures(
+    conn: &RequestConnection,
+    book: &str,
+    chapter: i64,
+) -> Result<Vec<LiteraryStructure>, async_graphql::Error> {
+    let sql = r#"
+SELECT structure_type, title, verse_start, verse_end, pairs::text, center_ref, source
+FROM literary_structures
+WHERE book = $1 AND chapter_start <= $2 AND chapter_end >= $2
+ORDER BY verse_start
+"#;
+    let rows = conn
+        .execute(sql, &[PgValue::Text(book.to_owned()), PgValue::Int(chapter)])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("literary_structures query failed: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| LiteraryStructure {
+            structure_type: text_col(&row, "structure_type"),
+            title:          opt_text_col(&row, "title"),
+            verse_start:    int_col(&row, "verse_start"),
+            verse_end:      int_col(&row, "verse_end"),
+            pairs:          text_col(&row, "pairs"),
+            center_ref:     opt_text_col(&row, "center_ref"),
+            source:         text_col(&row, "source"),
+        })
+        .collect())
+}
 
 /// Fetch discovery heat scores for a chapter from the materialized view.
 async fn fetch_discovery_heat(
@@ -701,6 +1014,123 @@ fn opt_text_col(row: &fw_graph_types::PgRow, col: &str) -> Option<String> {
         Some(PgValue::Null) | None => None,
         _ => None,
     }
+}
+
+// ── mainIdeas resolver ──────────────────────────────────────────────────────
+
+/// Build `mainIdeas(book: String!, chapter: Int!): [MainIdea!]!`
+pub fn main_ideas_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "mainIdeas",
+        TypeRef::named_nn_list_nn("MainIdea"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let conn = ctx
+                    .data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+
+                let ideas = fetch_main_ideas(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = ideas.into_iter().map(FieldValue::owned_any).collect();
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
+/// Build `literaryContext(book: String!, chapter: Int!): [LiteraryContext!]!`
+pub fn literary_context_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "literaryContext",
+        TypeRef::named_nn_list_nn("LiteraryContext"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let conn = ctx
+                    .data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+
+                let contexts = fetch_literary_context(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = contexts.into_iter().map(FieldValue::owned_any).collect();
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
+async fn fetch_main_ideas(
+    conn: &RequestConnection,
+    book: &str,
+    chapter: i64,
+) -> Result<Vec<MainIdea>, async_graphql::Error> {
+    let ch_prefix = format!("{}.", chapter);
+    let sql = r#"
+SELECT id::text, book, verse_start, verse_end, main_idea, series
+FROM commentary_main_ideas
+WHERE book = $1 AND (verse_start LIKE $2 OR verse_start LIKE $3)
+ORDER BY verse_start
+"#;
+    let rows = conn
+        .execute(sql, &[
+            PgValue::Text(book.to_owned()),
+            PgValue::Text(format!("{}%", ch_prefix)),
+            PgValue::Text(format!("{}.%", chapter)),
+        ])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("main_ideas query failed: {e}")))?;
+
+    Ok(rows.into_iter().map(|row| MainIdea {
+        id:          text_col(&row, "id"),
+        book:        text_col(&row, "book"),
+        verse_start: text_col(&row, "verse_start"),
+        verse_end:   text_col(&row, "verse_end"),
+        main_idea:   text_col(&row, "main_idea"),
+        series:      text_col(&row, "series"),
+    }).collect())
+}
+
+async fn fetch_literary_context(
+    conn: &RequestConnection,
+    book: &str,
+    chapter: i64,
+) -> Result<Vec<LiteraryContext>, async_graphql::Error> {
+    let ch_prefix = format!("{}.", chapter);
+    let sql = r#"
+SELECT id::text, book, verse_start, verse_end, context_prose::text, scripture_refs::text, series
+FROM commentary_literary_context
+WHERE book = $1 AND (verse_start LIKE $2 OR verse_start LIKE $3)
+ORDER BY verse_start
+"#;
+    let rows = conn
+        .execute(sql, &[
+            PgValue::Text(book.to_owned()),
+            PgValue::Text(format!("{}%", ch_prefix)),
+            PgValue::Text(format!("{}.%", chapter)),
+        ])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("literary_context query failed: {e}")))?;
+
+    Ok(rows.into_iter().map(|row| LiteraryContext {
+        id:              text_col(&row, "id"),
+        book:            text_col(&row, "book"),
+        verse_start:     text_col(&row, "verse_start"),
+        verse_end:       text_col(&row, "verse_end"),
+        context_prose:   text_col(&row, "context_prose"),
+        scripture_refs:  text_col(&row, "scripture_refs"),
+        series:          text_col(&row, "series"),
+    }).collect())
 }
 
 /// Extract a text array column. Handles `Array(Vec<PgValue>)` from the driver,
