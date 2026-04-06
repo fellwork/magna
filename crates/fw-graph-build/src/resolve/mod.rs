@@ -4,3 +4,4 @@ pub mod mutation;
 pub mod query;
 pub mod reader;
 pub mod relation;
+pub mod word_graph;

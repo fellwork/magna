@@ -38,6 +38,7 @@ use resolve::reader::{
     genre_sections_field, literary_context_field, literary_structures_field,
     main_ideas_field, pericope_context_field, register_reader_types,
 };
+use resolve::word_graph::{register_word_graph_types, word_graph_field};
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
 use resolve::relation::{build_belongs_to_resolver, build_has_many_resolver};
@@ -224,6 +225,7 @@ pub fn build_schema(
     builder = register_graph_types(builder);
     builder = register_alignment_types(builder);
     builder = register_reader_types(builder);
+    builder = register_word_graph_types(builder);
 
     // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
@@ -249,6 +251,7 @@ pub fn build_schema(
     query = query.field(literary_structures_field(executor.clone()));
     query = query.field(main_ideas_field(executor.clone()));
     query = query.field(literary_context_field(executor.clone()));
+    query = query.field(word_graph_field(executor.clone()));
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {
