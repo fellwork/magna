@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 fw-decode           = { path = "../fw-decode" }
 fw-translate        = { path = "../fw-translate" }
+toml                = { workspace = true }
 fw-graph-types      = { path = "../fw-graph-types" }
 fw-graph-core       = { path = "../fw-graph-core" }
 fw-graph-sql        = { path = "../fw-graph-sql" }
