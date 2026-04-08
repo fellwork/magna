@@ -53,7 +53,6 @@ fn tocma_structs_are_clonable() {
 mod e2e {
     use fw_graph_build::resolve::tocma::verse::fetch_genre_step;
     use fw_graph_build::resolve::tocma::verse::fetch_passage_tokens;
-    use fw_graph_build::resolve::tocma::theology::classify_doctrine_step;
     use fw_graph_build::resolve::tocma::input::assemble_theology_input;
     use fw_graph_build::executor::RequestConnection;
 
