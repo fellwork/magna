@@ -227,6 +227,12 @@ pub fn build_schema(
     builder = register_reader_types(builder);
     builder = register_word_graph_types(builder);
 
+    // 11c. Register TOCMA resolver types (Steps 1-12 + TheologyInput)
+    builder = resolve::tocma::verse::register_verse_types(builder);
+    builder = resolve::tocma::pericope::register_pericope_types(builder);
+    builder = resolve::tocma::theology::register_theology_types(builder);
+    builder = resolve::tocma::input::register_input_types(builder);
+
     // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
         let bs = behaviors.get(&resource.name).copied().unwrap_or_else(BehaviorSet::none);
@@ -252,6 +258,12 @@ pub fn build_schema(
     query = query.field(main_ideas_field(executor.clone()));
     query = query.field(literary_context_field(executor.clone()));
     query = query.field(word_graph_field(executor.clone()));
+
+    // TOCMA root queries
+    query = query.field(resolve::tocma::verse::tocma_verse_field());
+    query = query.field(resolve::tocma::pericope::tocma_pericope_field());
+    query = query.field(resolve::tocma::theology::tocma_pericope_full_field());
+    query = query.field(resolve::tocma::input::theology_input_field());
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {
