@@ -1,7 +1,7 @@
 //! Integration tests for TOCMA resolvers.
 //! Unit test: tocma_structs_are_clonable (always runs, no DB needed)
-//! E2E tests: require `--features integration` and local Supabase running.
-//!   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+//! E2E tests: require `--features integration` and DATABASE_URL set to production.
+//!   DATABASE_URL=<production-url> cargo test -p fw-graph-build --test tocma_integration --features integration -- e2e
 
 #[test]
 fn tocma_structs_are_clonable() {
@@ -45,9 +45,9 @@ fn tocma_structs_are_clonable() {
     let _ = doctrine.clone();
 }
 
-/// Golden-file snapshot tests require local Supabase.
+/// E2E tests require production DATABASE_URL and `--features integration`.
 /// Run with:
-///   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres \
+///   DATABASE_URL=<production-url> \
 ///     cargo test -p fw-graph-build --test tocma_integration --features integration -- e2e
 #[cfg(feature = "integration")]
 mod e2e {
@@ -62,7 +62,7 @@ mod e2e {
         use tokio::sync::Mutex;
 
         let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://postgres:postgres@127.0.0.1:54322/postgres".to_string());
+            .expect("DATABASE_URL must be set (use production connection string)");
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
             .connect(&url)
