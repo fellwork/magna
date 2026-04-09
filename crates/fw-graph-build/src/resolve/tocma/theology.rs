@@ -71,20 +71,99 @@ fn opt_text_col(row: &fw_graph_types::PgRow, col: &str) -> Option<String> {
 
 // ── Step 10: Biblical Theology ────────────────────────────────────────────────
 
-/// Build biblical theology arcs from commentary cross-references.
-/// Maps commentary relationship types to ArcLinkType enum values.
+/// Build biblical theology arcs for a given NT book.
+///
+/// Query priority:
+/// 1. `ot_in_nt_quotations` — Beale-Carson authoritative OT-in-NT catalog.
+///    Arcs are grouped into three themed sections by quotation type.
+/// 2. `commentary_cross_references` — general commentary xrefs as fallback
+///    when Beale-Carson data is not yet loaded for this book.
 pub async fn fetch_biblical_theology(
     conn: &RequestConnection,
     book: &str,
 ) -> Result<Option<BiblicalTheologyOutput>, async_graphql::Error> {
-    let sql = r#"
+    // ── Primary: Beale-Carson ot_in_nt_quotations ────────────────────────────
+    let bc_sql = r#"
+SELECT oinnt.nt_ref, oinnt.ot_ref, oinnt.quotation_type, oinnt.source_form,
+       oinnt.strength, oinnt.significance
+FROM ot_in_nt_quotations oinnt
+WHERE oinnt.nt_book = $1
+ORDER BY oinnt.nt_ref, oinnt.ot_ref
+LIMIT 200
+"#;
+    let bc_rows = conn.execute(bc_sql, &[PgValue::Text(book.to_owned())])
+        .await.unwrap_or_default();
+
+    if !bc_rows.is_empty() {
+        let mut quotations: Vec<ArcLink> = Vec::new();
+        let mut allusions:  Vec<ArcLink> = Vec::new();
+        let mut echoes:     Vec<ArcLink> = Vec::new();
+
+        for row in &bc_rows {
+            let nt_ref       = text_col(row, "nt_ref");
+            let ot_ref       = text_col(row, "ot_ref");
+            let qtype        = text_col(row, "quotation_type");
+            let src_form     = text_col(row, "source_form");
+            let significance = opt_text_col(row, "significance");
+
+            let link_type = match qtype.as_str() {
+                "direct_quotation" => "canonical_reinterpretation",
+                "allusion"         => "intertextual_allusion",
+                "echo"             => "lexical_echo",
+                _                  => "lexical_echo",
+            }.to_string();
+
+            let ot_book = ot_ref.split('.').next().unwrap_or("");
+            let direction = fw_decode::theology::arc_direction(book, ot_book).to_string();
+
+            // link_type_explained: use significance when available, else generic label
+            let link_type_explained = significance
+                .clone()
+                .unwrap_or_else(|| fw_decode::theology::explain_arc(&link_type, &direction).to_string());
+
+            let arc = ArcLink {
+                r#ref: ot_ref,
+                link_type,
+                link_type_explained,
+                direction,
+                shared_lemma: Some(nt_ref),   // NT verse that cites this OT ref
+                concept: if src_form.is_empty() || src_form == "unknown" {
+                    None
+                } else {
+                    Some(src_form)             // text form: "MT", "LXX", etc.
+                },
+            };
+
+            match qtype.as_str() {
+                "direct_quotation" => quotations.push(arc),
+                "allusion"         => allusions.push(arc),
+                _                  => echoes.push(arc),
+            }
+        }
+
+        let mut themes = Vec::new();
+        if !quotations.is_empty() {
+            themes.push(ThemeArc { theme: "Direct Quotations".to_string(), arc: quotations });
+        }
+        if !allusions.is_empty() {
+            themes.push(ThemeArc { theme: "Allusions".to_string(), arc: allusions });
+        }
+        if !echoes.is_empty() {
+            themes.push(ThemeArc { theme: "Echoes".to_string(), arc: echoes });
+        }
+
+        return Ok(Some(BiblicalTheologyOutput { themes, synthesis: None }));
+    }
+
+    // ── Fallback: commentary_cross_references ────────────────────────────────
+    let xref_sql = r#"
 SELECT ccr.target_ref, ccr.relationship
 FROM commentary_cross_references ccr
 WHERE ccr.book = $1
 ORDER BY ccr.target_ref
 LIMIT 30
 "#;
-    let rows = conn.execute(sql, &[PgValue::Text(book.to_owned())])
+    let rows = conn.execute(xref_sql, &[PgValue::Text(book.to_owned())])
         .await.unwrap_or_default();
 
     if rows.is_empty() {
@@ -95,7 +174,6 @@ LIMIT 30
         let target_ref = text_col(row, "target_ref");
         let relationship = text_col(row, "relationship");
         let link_type = normalize_relationship(&relationship);
-        // arc_direction(source_book, target_book) — approximate from book arg
         let direction = fw_decode::theology::arc_direction(book, &target_ref
             .split('.').next().unwrap_or("")).to_string();
         let link_type_explained = fw_decode::theology::explain_arc(&link_type, &direction).to_string();
@@ -109,13 +187,10 @@ LIMIT 30
         }
     }).collect();
 
-    // Group all arcs under a single "Cross-references" theme
-    let theme_arc = ThemeArc {
-        theme: "Cross-references".to_string(),
-        arc: arcs,
-    };
-
-    Ok(Some(BiblicalTheologyOutput { themes: vec![theme_arc], synthesis: None }))
+    Ok(Some(BiblicalTheologyOutput {
+        themes: vec![ThemeArc { theme: "Cross-references".to_string(), arc: arcs }],
+        synthesis: None,
+    }))
 }
 
 fn normalize_relationship(rel: &str) -> String {
