@@ -353,7 +353,7 @@ fn translate_token(
 ) -> (String, Option<String>, Option<String>, String, Option<String>, String) {
     if lang.contains("grc") {
         let parsed = fw_translate::greek::parse(morph);
-        let result = fw_translate::greek::render(&parsed, base_gloss, base_gloss, None);
+        let result = fw_translate::greek::render(&parsed, base_gloss, base_gloss, None, &fw_translate::greek::RenderContext::default());
         (
             result.english.clone(),
             result.components.prefix.clone(),
