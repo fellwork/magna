@@ -39,6 +39,7 @@ use resolve::reader::{
     main_ideas_field, pericope_context_field, register_reader_types,
 };
 use resolve::word_graph::{register_word_graph_types, word_graph_field};
+use resolve::word_study::{register_word_study_types, word_study_field};
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
 use resolve::relation::{build_belongs_to_resolver, build_has_many_resolver};
@@ -226,6 +227,7 @@ pub fn build_schema(
     builder = register_alignment_types(builder);
     builder = register_reader_types(builder);
     builder = register_word_graph_types(builder);
+    builder = register_word_study_types(builder);
 
     // 11c. Register TOCMA resolver types (Steps 1-12 + TheologyInput)
     builder = resolve::tocma::verse::register_verse_types(builder);
@@ -258,6 +260,7 @@ pub fn build_schema(
     query = query.field(main_ideas_field(executor.clone()));
     query = query.field(literary_context_field(executor.clone()));
     query = query.field(word_graph_field(executor.clone()));
+    query = query.field(word_study_field(executor.clone()));
 
     // TOCMA root queries
     query = query.field(resolve::tocma::verse::tocma_verse_field());

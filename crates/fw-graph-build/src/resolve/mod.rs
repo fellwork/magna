@@ -6,3 +6,4 @@ pub mod reader;
 pub mod relation;
 pub mod tocma;
 pub mod word_graph;
+pub mod word_study;
