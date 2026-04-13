@@ -364,7 +364,7 @@ fn translate_token(
         )
     } else {
         let parsed = fw_translate::hebrew::parse(morph);
-        let result = fw_translate::hebrew::render(&parsed, base_gloss, None, base_gloss, None);
+        let result = fw_translate::hebrew::render(&parsed, base_gloss, None, base_gloss, None, None);
         (
             result.english.clone(),
             result.components.prefix.clone(),
