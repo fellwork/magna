@@ -34,10 +34,12 @@ use resolve::graph::{
     register_graph_types,
 };
 use resolve::reader::{
-    concept_alignments_field, depth_insights_field, discovery_heat_field,
-    genre_sections_field, literary_context_field, literary_structures_field,
-    main_ideas_field, pericope_context_field, register_reader_types,
+    concept_alignments_field, connected_insights_field, depth_insights_field,
+    discovery_heat_field, genre_sections_field, literary_context_field,
+    literary_structures_field, main_ideas_field, pericope_context_field,
+    register_reader_types,
 };
+use resolve::reader_blocks::{phrased_block_type, phrased_blocks_field};
 use resolve::word_graph::{register_word_graph_types, word_graph_field};
 use resolve::word_study::{register_word_study_types, word_study_field};
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
@@ -226,6 +228,7 @@ pub fn build_schema(
     builder = register_graph_types(builder);
     builder = register_alignment_types(builder);
     builder = register_reader_types(builder);
+    builder = builder.register(phrased_block_type());
     builder = register_word_graph_types(builder);
     builder = register_word_study_types(builder);
 
@@ -259,6 +262,8 @@ pub fn build_schema(
     query = query.field(literary_structures_field(executor.clone()));
     query = query.field(main_ideas_field(executor.clone()));
     query = query.field(literary_context_field(executor.clone()));
+    query = query.field(phrased_blocks_field(executor.clone()));
+    query = query.field(connected_insights_field(executor.clone()));
     query = query.field(word_graph_field(executor.clone()));
     query = query.field(word_study_field(executor.clone()));
 
