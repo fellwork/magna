@@ -119,6 +119,15 @@ pub struct LiteraryStructure {
     pub source: String,
 }
 
+/// A connected insight from another passage that references the current chapter.
+#[derive(Clone)]
+pub struct ConnectedInsight {
+    pub insight_id: String,
+    pub source_passage_ref: String,
+    pub source_title: String,
+    pub link_direction: String,
+}
+
 // ── Type registration ─────────────────────────────────────────────────────────
 
 /// Register `ConceptAlignment`, `DepthInsight` and `PericopeUnit` object types.
@@ -508,6 +517,33 @@ pub fn register_reader_types(
                     FieldFuture::new(async move {
                         let l = ctx.parent_value.try_downcast_ref::<LiteraryContext>()?;
                         Ok(Some(FieldValue::value(l.series.clone())))
+                    })
+                }))
+        })
+        .register({
+            Object::new("ConnectedInsight")
+                .field(Field::new("insightId", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let c = ctx.parent_value.try_downcast_ref::<ConnectedInsight>()?;
+                        Ok(Some(FieldValue::value(c.insight_id.clone())))
+                    })
+                }))
+                .field(Field::new("sourcePassageRef", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let c = ctx.parent_value.try_downcast_ref::<ConnectedInsight>()?;
+                        Ok(Some(FieldValue::value(c.source_passage_ref.clone())))
+                    })
+                }))
+                .field(Field::new("sourceTitle", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let c = ctx.parent_value.try_downcast_ref::<ConnectedInsight>()?;
+                        Ok(Some(FieldValue::value(c.source_title.clone())))
+                    })
+                }))
+                .field(Field::new("linkDirection", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+                    FieldFuture::new(async move {
+                        let c = ctx.parent_value.try_downcast_ref::<ConnectedInsight>()?;
+                        Ok(Some(FieldValue::value(c.link_direction.clone())))
                     })
                 }))
         })
@@ -1068,6 +1104,70 @@ pub fn literary_context_field(_executor: Arc<QueryExecutor>) -> Field {
     )
     .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
     .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
+// ── connectedInsights resolver ─────────────────────────────────────────────
+
+/// Build `connectedInsights(book: String!, chapter: Int!): [ConnectedInsight!]!`
+///
+/// Returns insights from OTHER passages that reference the current chapter
+/// via `depth_insight_links`, excluding self-references.
+pub fn connected_insights_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "connectedInsights",
+        TypeRef::named_nn_list_nn("ConnectedInsight"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let conn = ctx
+                    .data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
+                    .to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+
+                let insights = fetch_connected_insights(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = insights.into_iter().map(FieldValue::owned_any).collect();
+                Ok(Some(FieldValue::list(values)))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+}
+
+async fn fetch_connected_insights(
+    conn: &RequestConnection,
+    book: &str,
+    chapter: i64,
+) -> Result<Vec<ConnectedInsight>, async_graphql::Error> {
+    let like_pattern = format!("{}.{}.", book, chapter);
+
+    let sql = r#"
+SELECT dil.insight_id::text, di.passage_ref AS source_passage_ref, di.title AS source_title, dil.link_direction
+FROM depth_insight_links dil
+JOIN depth_insights di ON di.id = dil.insight_id
+WHERE dil.linked_passage_ref LIKE $1
+  AND di.passage_ref NOT LIKE $1
+LIMIT 50
+"#;
+
+    let rows = conn
+        .execute(sql, &[PgValue::Text(format!("{}%", like_pattern))])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("connected_insights query failed: {e}")))?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ConnectedInsight {
+            insight_id:         text_col(&row, "insight_id"),
+            source_passage_ref: text_col(&row, "source_passage_ref"),
+            source_title:       text_col(&row, "source_title"),
+            link_direction:     text_col(&row, "link_direction"),
+        })
+        .collect())
 }
 
 async fn fetch_main_ideas(
