@@ -36,6 +36,15 @@ pub struct VerseEntity {
     pub entity_type: String,
 }
 
+/// A doctrine tag from pericope excursus data.
+#[derive(Clone)]
+pub struct DoctrineTag {
+    pub topic: String,
+    pub category: Option<String>,
+    pub subcategory: Option<String>,
+    pub key_ref: Option<String>,
+}
+
 /// Complete word graph data for a tapped vocabulary item.
 #[derive(Clone)]
 pub struct WordGraph {
@@ -74,6 +83,9 @@ pub struct WordGraph {
 
     // From commentary_applications (scoped to pericope)
     pub application: Option<String>,
+
+    // From pericope_excursus (doctrine tags for book)
+    pub doctrine_tags: Vec<DoctrineTag>,
 }
 
 // ── Type registration ─────────────────────────────────────────────────────────
@@ -121,6 +133,32 @@ pub fn register_word_graph_types(
             FieldFuture::new(async move {
                 let e = ctx.parent_value.try_downcast_ref::<VerseEntity>()?;
                 Ok(Some(FieldValue::value(e.entity_type.clone())))
+            })
+        }));
+
+    let doctrine_tag = Object::new("DoctrineTag")
+        .field(Field::new("topic", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let d = ctx.parent_value.try_downcast_ref::<DoctrineTag>()?;
+                Ok(Some(FieldValue::value(d.topic.clone())))
+            })
+        }))
+        .field(Field::new("category", TypeRef::named(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let d = ctx.parent_value.try_downcast_ref::<DoctrineTag>()?;
+                Ok(d.category.clone().map(FieldValue::value))
+            })
+        }))
+        .field(Field::new("subcategory", TypeRef::named(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let d = ctx.parent_value.try_downcast_ref::<DoctrineTag>()?;
+                Ok(d.subcategory.clone().map(FieldValue::value))
+            })
+        }))
+        .field(Field::new("keyRef", TypeRef::named(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let d = ctx.parent_value.try_downcast_ref::<DoctrineTag>()?;
+                Ok(d.key_ref.clone().map(FieldValue::value))
             })
         }));
 
@@ -259,12 +297,23 @@ pub fn register_word_graph_types(
                 let w = ctx.parent_value.try_downcast_ref::<WordGraph>()?;
                 Ok(w.application.clone().map(FieldValue::value))
             })
+        }))
+        // Doctrine tags
+        .field(Field::new("doctrineTags", TypeRef::named_nn_list_nn("DoctrineTag"), |ctx| {
+            FieldFuture::new(async move {
+                let w = ctx.parent_value.try_downcast_ref::<WordGraph>()?;
+                let values: Vec<FieldValue> = w.doctrine_tags.iter()
+                    .map(|d| FieldValue::owned_any(d.clone()))
+                    .collect();
+                Ok(Some(FieldValue::list(values)))
+            })
         }));
 
     builder
         .register(word_study)
         .register(cross_ref)
         .register(verse_entity)
+        .register(doctrine_tag)
         .register(word_graph)
 }
 
@@ -512,6 +561,28 @@ LIMIT 1
 
     let application = app_rows.first().and_then(|row| opt_text_col(row, "content"));
 
+    // 9. Doctrine tags from pericope_excursus
+    let doctrine_sql = r#"
+SELECT topic, systematic_doctrine_category, systematic_doctrine_subcategory, key_ref
+FROM pericope_excursus
+WHERE book = $1
+LIMIT 20
+"#;
+    let doctrine_rows = conn
+        .execute(doctrine_sql, &[PgValue::Text(book.to_owned())])
+        .await
+        .map_err(|e| async_graphql::Error::new(format!("pericope_excursus query failed: {e}")))?;
+
+    let doctrine_tags: Vec<DoctrineTag> = doctrine_rows
+        .into_iter()
+        .map(|row| DoctrineTag {
+            topic: text_col(&row, "topic"),
+            category: opt_text_col(&row, "systematic_doctrine_category"),
+            subcategory: opt_text_col(&row, "systematic_doctrine_subcategory"),
+            key_ref: opt_text_col(&row, "key_ref"),
+        })
+        .collect();
+
     Ok(Some(WordGraph {
         lemma,
         transliteration,
@@ -533,6 +604,7 @@ LIMIT 1
         entities,
         clause_role,
         application,
+        doctrine_tags,
     }))
 }
 
