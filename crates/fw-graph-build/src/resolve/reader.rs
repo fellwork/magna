@@ -16,7 +16,10 @@ use async_graphql::dynamic::{
 };
 use fw_graph_types::PgValue;
 
+use fw_store::client::StoreCache;
+
 use crate::executor::{QueryExecutor, RequestConnection};
+use super::store_reader;
 
 // ── Output structs ────────────────────────────────────────────────────────────
 
@@ -126,6 +129,35 @@ pub struct ConnectedInsight {
     pub source_passage_ref: String,
     pub source_title: String,
     pub link_direction: String,
+}
+
+/// A full pericope drill-down: pericope metadata + all related entity IDs.
+/// Consumers use the IDs to pull detailed rows from their respective stores.
+#[derive(Clone)]
+pub struct PericopeDrilldown {
+    pub pericope_id: String,
+    pub book: String,
+    pub passage_ref: String,
+    pub pericope_title: String,
+    pub chapter_start: i64,
+    pub verse_start: i64,
+    pub chapter_end: i64,
+    pub verse_end: Option<i64>,
+    pub pm_clause_ids: Vec<String>,
+    pub pm_discourse_unit_ids: Vec<String>,
+    pub phrase_structure_node_ids: Vec<String>,
+    pub commentary_main_idea_ids: Vec<String>,
+    pub commentary_literary_context_ids: Vec<String>,
+    pub concept_alignment_ids: Vec<String>,
+    pub depth_insight_ids: Vec<String>,
+    pub genre_section_ids: Vec<String>,
+}
+
+/// Result of a verse → pericope lookup.
+#[derive(Clone)]
+pub struct VersePericope {
+    pub pericope_id: String,
+    pub pericope_title: String,
 }
 
 // ── Type registration ─────────────────────────────────────────────────────────
@@ -547,6 +579,101 @@ pub fn register_reader_types(
                     })
                 }))
         })
+        .register(verse_pericope_type())
+        .register(pericope_drilldown_type())
+}
+
+// ── Pericope index types ────────────────────────────────────────────────────
+
+fn verse_pericope_type() -> Object {
+    Object::new("VersePericope")
+        .field(Field::new("pericopeId", TypeRef::named_nn(TypeRef::ID), |ctx| {
+            FieldFuture::new(async move {
+                let v = ctx.parent_value.try_downcast_ref::<VersePericope>()?;
+                Ok(Some(FieldValue::value(v.pericope_id.clone())))
+            })
+        }))
+        .field(Field::new("pericopeTitle", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let v = ctx.parent_value.try_downcast_ref::<VersePericope>()?;
+                Ok(Some(FieldValue::value(v.pericope_title.clone())))
+            })
+        }))
+}
+
+fn pericope_drilldown_type() -> Object {
+    fn str_list<F: Fn(&PericopeDrilldown) -> &Vec<String> + Send + Sync + 'static>(
+        name: &'static str,
+        accessor: F,
+    ) -> Field {
+        let accessor = std::sync::Arc::new(accessor);
+        Field::new(name, TypeRef::named_nn_list_nn(TypeRef::STRING), move |ctx| {
+            let accessor = accessor.clone();
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                let ids: Vec<FieldValue> = accessor(p).iter().map(|s| FieldValue::value(s.clone())).collect();
+                Ok(Some(FieldValue::list(ids)))
+            })
+        })
+    }
+
+    Object::new("PericopeDrilldown")
+        .field(Field::new("pericopeId", TypeRef::named_nn(TypeRef::ID), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.pericope_id.clone())))
+            })
+        }))
+        .field(Field::new("book", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.book.clone())))
+            })
+        }))
+        .field(Field::new("passageRef", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.passage_ref.clone())))
+            })
+        }))
+        .field(Field::new("pericopeTitle", TypeRef::named_nn(TypeRef::STRING), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.pericope_title.clone())))
+            })
+        }))
+        .field(Field::new("chapterStart", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.chapter_start)))
+            })
+        }))
+        .field(Field::new("verseStart", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.verse_start)))
+            })
+        }))
+        .field(Field::new("chapterEnd", TypeRef::named_nn(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(Some(FieldValue::value(p.chapter_end)))
+            })
+        }))
+        .field(Field::new("verseEnd", TypeRef::named(TypeRef::INT), |ctx| {
+            FieldFuture::new(async move {
+                let p = ctx.parent_value.try_downcast_ref::<PericopeDrilldown>()?;
+                Ok(p.verse_end.map(FieldValue::value))
+            })
+        }))
+        .field(str_list("pmClauseIds", |p| &p.pm_clause_ids))
+        .field(str_list("pmDiscourseUnitIds", |p| &p.pm_discourse_unit_ids))
+        .field(str_list("phraseStructureNodeIds", |p| &p.phrase_structure_node_ids))
+        .field(str_list("commentaryMainIdeaIds", |p| &p.commentary_main_idea_ids))
+        .field(str_list("commentaryLiteraryContextIds", |p| &p.commentary_literary_context_ids))
+        .field(str_list("conceptAlignmentIds", |p| &p.concept_alignment_ids))
+        .field(str_list("depthInsightIds", |p| &p.depth_insight_ids))
+        .field(str_list("genreSectionIds", |p| &p.genre_section_ids))
 }
 
 // ── conceptAlignments resolver ───────────────────────────────────────────────
@@ -563,6 +690,15 @@ pub fn concept_alignments_field(_executor: Arc<QueryExecutor>) -> Field {
             FieldFuture::new(async move {
                 let book: String = ctx.args.try_get("book")?.string()?.to_owned();
                 let chapter: i64 = ctx.args.try_get("chapter")?.i64()?;
+
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "alignments") {
+                        let alignments = store_reader::fetch_concept_alignments_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = alignments.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
                 let conn = ctx.data::<RequestConnection>()?;
                 let alignments = fetch_concept_alignments(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = alignments
@@ -589,29 +725,23 @@ pub fn depth_insights_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("DepthInsight"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
-                let book = ctx
-                    .args
-                    .try_get("book")?
-                    .string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
-
-                let chapter = ctx
-                    .args
-                    .try_get("chapter")?
-                    .i64()
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
-                let insights = fetch_depth_insights(conn, &book, chapter).await?;
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "insights") {
+                        let insights = store_reader::fetch_depth_insights_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = insights.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
 
-                let values: Vec<FieldValue> = insights
-                    .into_iter()
-                    .map(|d| FieldValue::owned_any(d))
-                    .collect();
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+                let insights = fetch_depth_insights(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = insights.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
             })
         },
@@ -631,29 +761,23 @@ pub fn pericope_context_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("PericopeUnit"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
-                let book = ctx
-                    .args
-                    .try_get("book")?
-                    .string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
-
-                let chapter = ctx
-                    .args
-                    .try_get("chapter")?
-                    .i64()
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
-                let units = fetch_pericope_context(conn, &book, chapter).await?;
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "structure") {
+                        let units = store_reader::fetch_pericope_context_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = units.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
 
-                let values: Vec<FieldValue> = units
-                    .into_iter()
-                    .map(|p| FieldValue::owned_any(p))
-                    .collect();
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
+                let units = fetch_pericope_context(conn, &book, chapter).await?;
+                let values: Vec<FieldValue> = units.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
             })
         },
@@ -673,19 +797,20 @@ pub fn discovery_heat_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("DiscoveryHeat"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
                 let book = ctx.args.try_get("book")?.string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
-                let heats = fetch_discovery_heat(conn, &book, chapter).await?;
-                let values: Vec<FieldValue> = heats.into_iter().map(FieldValue::owned_any).collect();
-                Ok(Some(FieldValue::list(values)))
+                // Discovery heat is runtime user data — always query DB when available
+                if let Some(conn) = ctx.data_opt::<RequestConnection>() {
+                    let heats = fetch_discovery_heat(conn, &book, chapter).await?;
+                    let values: Vec<FieldValue> = heats.into_iter().map(FieldValue::owned_any).collect();
+                    return Ok(Some(FieldValue::list(values)));
+                }
+
+                // No DB connection (pure file mode) — return empty
+                Ok(Some(FieldValue::list(Vec::<FieldValue>::new())))
             })
         },
     )
@@ -702,14 +827,21 @@ pub fn genre_sections_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("GenreSection"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let book = ctx.args.try_get("book")?.string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "structure") {
+                        let sections = store_reader::fetch_genre_sections_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = sections.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let sections = fetch_genre_sections(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = sections.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
@@ -729,14 +861,21 @@ pub fn literary_structures_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("LiteraryStructure"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let book = ctx.args.try_get("book")?.string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "structure") {
+                        let structures = store_reader::fetch_literary_structures_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = structures.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let structures = fetch_literary_structures(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = structures.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
@@ -1061,15 +1200,21 @@ pub fn main_ideas_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("MainIdea"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
                 let book = ctx.args.try_get("book")?.string()
                     .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "commentary") {
+                        let ideas = store_reader::fetch_main_ideas_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = ideas.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let ideas = fetch_main_ideas(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = ideas.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
@@ -1087,15 +1232,21 @@ pub fn literary_context_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("LiteraryContext"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
                 let book = ctx.args.try_get("book")?.string()
                     .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "commentary") {
+                        let contexts = store_reader::fetch_literary_context_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = contexts.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let contexts = fetch_literary_context(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = contexts.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
@@ -1118,16 +1269,21 @@ pub fn connected_insights_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("ConnectedInsight"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
                 let book = ctx.args.try_get("book")?.string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store("_global", "insights") {
+                        let insights = store_reader::fetch_connected_insights_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = insights.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let insights = fetch_connected_insights(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = insights.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))
@@ -1256,4 +1412,70 @@ fn text_array_col(row: &fw_graph_types::PgRow, col: &str) -> Vec<String> {
         Some(PgValue::Text(s)) if !s.is_empty() => vec![s.clone()],
         _ => vec![],
     }
+}
+
+// ── versePericope resolver ──────────────────────────────────────────────────
+
+/// Build `versePericope(book, chapter, verse): VersePericope`
+///
+/// Given a verse reference, returns the pericope that contains it.
+/// Only works when a StoreCache is available (uses the pericope_index).
+pub fn verse_pericope_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "versePericope",
+        TypeRef::named("VersePericope"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let book = ctx.args.try_get("book")?.string()
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
+                let chapter = ctx.args.try_get("chapter")?.i64()
+                    .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
+                let verse = ctx.args.try_get("verse")?.i64()
+                    .map_err(|_| async_graphql::Error::new("verse must be an int"))?;
+
+                let Some(cache) = ctx.data_opt::<StoreCache>() else {
+                    return Ok(None);
+                };
+                if !cache.has_store("_global", "pericope_index") {
+                    return Ok(None);
+                }
+
+                let result = store_reader::fetch_verse_pericope_from_store(cache, &book, chapter, verse)?;
+                Ok(result.map(FieldValue::owned_any))
+            })
+        },
+    )
+    .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
+    .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
+    .argument(InputValue::new("verse",   TypeRef::named_nn(TypeRef::INT)))
+}
+
+// ── pericopeDrilldown resolver ──────────────────────────────────────────────
+
+/// Build `pericopeDrilldown(pericopeId: ID!): PericopeDrilldown`
+///
+/// Returns every related entity ID for a pericope in a single pointer lookup.
+/// The client uses those IDs to fetch details from other stores as needed.
+pub fn pericope_drilldown_field(_executor: Arc<QueryExecutor>) -> Field {
+    Field::new(
+        "pericopeDrilldown",
+        TypeRef::named("PericopeDrilldown"),
+        |ctx| {
+            FieldFuture::new(async move {
+                let id = ctx.args.try_get("pericopeId")?.string()
+                    .map_err(|_| async_graphql::Error::new("pericopeId must be a string"))?.to_owned();
+
+                let Some(cache) = ctx.data_opt::<StoreCache>() else {
+                    return Ok(None);
+                };
+                if !cache.has_store("_global", "pericope_index") {
+                    return Ok(None);
+                }
+
+                let result = store_reader::fetch_pericope_drilldown_from_store(cache, &id)?;
+                Ok(result.map(FieldValue::owned_any))
+            })
+        },
+    )
+    .argument(InputValue::new("pericopeId", TypeRef::named_nn(TypeRef::ID)))
 }

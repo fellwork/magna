@@ -13,6 +13,7 @@ fw-graph-sql        = { path = "../fw-graph-sql" }
 fw-graph-introspect = { path = "../fw-graph-introspect" }
 fw-graph-dataplan   = { path = "../fw-graph-dataplan" }
 fw-graph-config     = { path = "../fw-graph-config" }
+fw-store            = { path = "../fw-store" }
 async-graphql       = { workspace = true }
 async-trait         = { workspace = true }
 sqlx                = { workspace = true }

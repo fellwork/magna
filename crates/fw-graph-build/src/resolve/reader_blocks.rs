@@ -10,7 +10,10 @@ use async_graphql::dynamic::{
 };
 use fw_graph_types::PgValue;
 
+use fw_store::client::StoreCache;
+
 use crate::executor::{QueryExecutor, RequestConnection};
+use super::store_reader;
 
 // ── Output struct ────────────────────────────────────────────────────────────
 
@@ -58,16 +61,21 @@ pub fn phrased_blocks_field(_executor: Arc<QueryExecutor>) -> Field {
         TypeRef::named_nn_list_nn("PhrasedBlock"),
         |ctx| {
             FieldFuture::new(async move {
-                let conn = ctx
-                    .data_opt::<RequestConnection>()
-                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
-
                 let book = ctx.args.try_get("book")?.string()
-                    .map_err(|_| async_graphql::Error::new("book must be a string"))?
-                    .to_owned();
+                    .map_err(|_| async_graphql::Error::new("book must be a string"))?.to_owned();
                 let chapter = ctx.args.try_get("chapter")?.i64()
                     .map_err(|_| async_graphql::Error::new("chapter must be an int"))?;
 
+                if let Some(cache) = ctx.data_opt::<StoreCache>() {
+                    if cache.has_store(&book, "phrasing") {
+                        let blocks = store_reader::fetch_phrased_blocks_from_store(cache, &book, chapter)?;
+                        let values: Vec<FieldValue> = blocks.into_iter().map(FieldValue::owned_any).collect();
+                        return Ok(Some(FieldValue::list(values)));
+                    }
+                }
+
+                let conn = ctx.data_opt::<RequestConnection>()
+                    .ok_or_else(|| async_graphql::Error::new("No database connection"))?;
                 let blocks = fetch_phrased_blocks(conn, &book, chapter).await?;
                 let values: Vec<FieldValue> = blocks.into_iter().map(FieldValue::owned_any).collect();
                 Ok(Some(FieldValue::list(values)))

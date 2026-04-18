@@ -4,6 +4,7 @@ pub mod mutation;
 pub mod query;
 pub mod reader;
 pub mod reader_blocks;
+pub mod store_reader;
 pub mod relation;
 pub mod tocma;
 pub mod word_graph;
