@@ -87,8 +87,9 @@ async fn main() {
     );
 
     // 10. Build GraphQL schema from gathered output.
+    // store_cache = None: the binary runs against live Postgres, not local stores.
     let schema =
-        build_schema(&gather_output, &gather_output.behaviors, pool.clone()).expect("build_schema failed");
+        build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None).expect("build_schema failed");
 
     info!("graphql schema built");
 
@@ -172,8 +173,9 @@ async fn watch_for_reload(
                 };
 
                 // Re-build schema.
+                // store_cache = None: hot-reload stays on live Postgres.
                 let new_schema =
-                    match build_schema(&gather_output, &gather_output.behaviors, pool.clone()) {
+                    match build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None) {
                         Ok(s) => s,
                         Err(e) => {
                             error!(error = %e, "re-build_schema failed — keeping current schema");
