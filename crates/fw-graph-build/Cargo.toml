@@ -5,7 +5,11 @@ edition = "2021"
 
 [dependencies]
 fw-decode           = { path = "../fw-decode" }
-fw-translate        = { path = "../fw-translate" }
+# fw-translate dep removed 2026-04-20 per Fix C. The TOCMA verse resolver
+# previously called fw_translate::{greek,hebrew}::render() live at query
+# time; it now reads the pre-computed fellwork_glosses cache. See
+# crates/fw-graph-build/src/resolve/tocma/verse.rs and
+# wiki/analyses/2026-04-20-tocma-rendering-diagnosis.md §P2.
 toml                = { workspace = true }
 fw-graph-types      = { path = "../fw-graph-types" }
 fw-graph-core       = { path = "../fw-graph-core" }
