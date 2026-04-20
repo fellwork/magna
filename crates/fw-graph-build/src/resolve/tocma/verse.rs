@@ -2,6 +2,19 @@
 //!
 //! All SQL uses RequestConnection + PgValue — same pattern as reader.rs.
 //! passage_tokens joined to passages for book/chapter/verse lookup.
+//!
+//! ## Translation cache (Fix C, 2026-04-20)
+//!
+//! `fetch_passage_tokens` LEFT JOINs `fellwork_glosses` — the pre-computed
+//! translation cache populated by the fw-translate CLI at ingest time. It does
+//! NOT call `fw_translate::{greek,hebrew}::render()` at query time. Ingest
+//! runs the full resolution chain (fingerprint + sense + word-study), writes
+//! the English rendering + component breakdown to fellwork_glosses; this
+//! resolver simply reads the cached row. On cache miss, falls back to the
+//! base gloss string with a tracing warning — prevents panics on uncovered
+//! tokens while flagging the coverage gap.
+//!
+//! Context: wiki/analyses/2026-04-20-tocma-rendering-diagnosis.md §P2.
 
 use async_graphql::dynamic::*;
 use fw_decode::{
@@ -56,6 +69,38 @@ fn bool_col(row: &fw_graph_types::PgRow, col: &str) -> bool {
         Some(PgValue::Bool(b)) => *b,
         _ => false,
     }
+}
+
+/// Read a top-level string field from a JSONB column. Returns None when the
+/// column is null/missing or the value at `field` is not a string.
+fn jsonb_str_field(row: &fw_graph_types::PgRow, col: &str, field: &str) -> Option<String> {
+    match row.get(col) {
+        Some(PgValue::Json(v)) => v.get(field).and_then(|x| x.as_str()).map(|s| s.to_string()),
+        _ => None,
+    }
+}
+
+/// Pretty-label the JSONB `gloss_source` enum variant. For map-shape variants
+/// like `{"Fingerprint": {...}}` returns the first key; for unit variants like
+/// `"ShortGloss"` returns the string. Returns empty string when unavailable.
+fn jsonb_gloss_source_label(row: &fw_graph_types::PgRow, col: &str) -> String {
+    let v = match row.get(col) {
+        Some(PgValue::Json(v)) => v,
+        _ => return String::new(),
+    };
+    let gs = match v.get("gloss_source") {
+        Some(x) => x,
+        None => return String::new(),
+    };
+    if let Some(s) = gs.as_str() {
+        return s.to_string();
+    }
+    if let Some(obj) = gs.as_object() {
+        if let Some((k, _)) = obj.iter().next() {
+            return k.clone();
+        }
+    }
+    String::new()
 }
 
 // ── SQL Fetch Functions ──────────────────────────────────────────────────────
@@ -263,7 +308,19 @@ LIMIT 1
     }))
 }
 
-/// Fetch passage tokens for a verse range, applying fw-decode + fw-translate.
+/// Fetch passage tokens for a verse range, reading the pre-computed
+/// `fellwork_glosses` cache instead of calling `fw_translate::render()` live.
+///
+/// Fix C (2026-04-20): the previous implementation called
+/// `fw_translate::{greek,hebrew}::render(base_gloss, base_gloss, None, None, …)`
+/// for each token at query time — stripping fingerprint/sense/word-study
+/// context and bypassing the cea58d3 ingest-time fix. It now LEFT JOINs
+/// `fellwork_glosses` (populated by `cargo run --release -p fw-translate`)
+/// and reads the English rendering + components JSONB directly.
+///
+/// Cache miss fallback: emits a `tracing::warn!` and returns the vocabulary
+/// `short_gloss` as both `english` and `core`. This is a last-resort shim so
+/// uncovered tokens don't crash the query; it is never the intended path.
 pub async fn fetch_passage_tokens(
     conn: &RequestConnection,
     book: &str,
@@ -283,10 +340,13 @@ SELECT
   p.language_code::text AS lang,
   COALESCE(vi.short_gloss, pt.gloss, '') AS short_gloss,
   COALESCE(vi.semantic_domain, '') AS semantic_domain,
-  COALESCE(vi.frequency_count, 0) AS frequency_count
+  COALESCE(vi.frequency_count, 0) AS frequency_count,
+  fg.english_text            AS cached_english,
+  fg.components              AS cached_components
 FROM passage_tokens pt
 JOIN passages p ON p.id = pt.passage_id
 LEFT JOIN vocabulary_items vi ON vi.id = pt.vocabulary_item_id
+LEFT JOIN fellwork_glosses fg ON fg.passage_token_id = pt.id
 WHERE p.book = $1 AND p.chapter = $2
   AND p.verse >= $3 AND p.verse <= $4
 ORDER BY p.verse, pt.position
@@ -298,12 +358,15 @@ ORDER BY p.verse, pt.position
         PgValue::Int(verse_end),
     ]).await.map_err(|e| async_graphql::Error::new(format!("passage_tokens query: {e}")))?;
 
-    Ok(rows.iter().map(|row| {
+    let mut cache_misses = 0usize;
+    let tokens: Vec<PassageToken> = rows.iter().map(|row| {
         let lang = text_col(row, "lang");
         let morph = text_col(row, "morphology_code");
         let orig = text_col(row, "original_word");
         let xlit = text_col(row, "transliteration");
-        let gloss = text_col(row, "short_gloss");
+        let short_gloss = text_col(row, "short_gloss");
+        let verse = int_col(row, "verse");
+        let position = int_col(row, "position");
 
         let (morphology_decoded, morphology_plain) = if lang.contains("grc") {
             (decode_greek_morphology(&morph), greek_plain(&morph).to_string())
@@ -311,8 +374,26 @@ ORDER BY p.verse, pt.position
             (decode_hebrew_morphology(&morph), hebrew_plain(&morph).to_string())
         };
 
+        // Pre-computed rendering from fellwork_glosses. Cache miss → fallback.
+        let cached_english = opt_text_col(row, "cached_english");
         let (gloss_english, gloss_prefix, gloss_subject, gloss_core, gloss_suffix, gloss_src) =
-            translate_token(&lang, &morph, &orig, &xlit, book, &gloss);
+            if let Some(english) = cached_english {
+                let prefix = jsonb_str_field(row, "cached_components", "prefix");
+                let subject = jsonb_str_field(row, "cached_components", "subject");
+                let core = jsonb_str_field(row, "cached_components", "core")
+                    .unwrap_or_else(|| english.clone());
+                let suffix = jsonb_str_field(row, "cached_components", "suffix");
+                let src = jsonb_gloss_source_label(row, "cached_components");
+                (english, prefix, subject, core, suffix, src)
+            } else {
+                cache_misses += 1;
+                let fallback = if short_gloss.is_empty() {
+                    orig.clone()
+                } else {
+                    short_gloss.clone()
+                };
+                (fallback.clone(), None, None, fallback, None, "CacheMiss".to_string())
+            };
 
         let freq = float_col(row, "frequency_count").max(1.0);
         let rarity = (1.0 - (freq.ln() / 10.0_f64.ln())).clamp(0.0, 1.0) as f32;
@@ -330,8 +411,8 @@ ORDER BY p.verse, pt.position
         });
 
         PassageToken {
-            verse: int_col(row, "verse"),
-            position: int_col(row, "position"),
+            verse,
+            position,
             original_word: orig,
             transliteration: xlit,
             morphology_code: morph,
@@ -347,41 +428,22 @@ ORDER BY p.verse, pt.position
             louw_nida_domain: sem_domain,
             louw_nida_domain_name: domain_name_str,
         }
-    }).collect())
-}
+    }).collect();
 
-/// Call fw-translate for a single token.
-fn translate_token(
-    lang: &str,
-    morph: &str,
-    _orig: &str,
-    _xlit: &str,
-    _book: &str,
-    base_gloss: &str,
-) -> (String, Option<String>, Option<String>, String, Option<String>, String) {
-    if lang.contains("grc") {
-        let parsed = fw_translate::greek::parse(morph);
-        let result = fw_translate::greek::render(&parsed, base_gloss, base_gloss, None, None, &fw_translate::greek::RenderContext::default());
-        (
-            result.english.clone(),
-            result.components.prefix.clone(),
-            result.components.subject.clone(),
-            result.components.core.clone(),
-            result.components.suffix.clone(),
-            format!("{:?}", result.components.gloss_source),
-        )
-    } else {
-        let parsed = fw_translate::hebrew::parse(morph);
-        let result = fw_translate::hebrew::render(&parsed, base_gloss, None, base_gloss, None, None);
-        (
-            result.english.clone(),
-            result.components.prefix.clone(),
-            result.components.subject.clone(),
-            result.components.core.clone(),
-            result.components.suffix.clone(),
-            format!("{:?}", result.components.gloss_source),
-        )
+    if cache_misses > 0 {
+        tracing::warn!(
+            book = book,
+            chapter = chapter,
+            verse_start = verse_start,
+            verse_end = verse_end,
+            total = tokens.len(),
+            cache_misses = cache_misses,
+            "tocma_verse: fellwork_glosses cache miss — falling back to short_gloss. \
+             Re-run `cargo run --release -p fw-translate -- --book {book}` to populate."
+        );
     }
+
+    Ok(tokens)
 }
 
 // ── GraphQL Type Registration ────────────────────────────────────────────────
@@ -755,4 +817,69 @@ pub fn tocma_verse_field() -> Field {
     .argument(InputValue::new("book",    TypeRef::named_nn(TypeRef::STRING)))
     .argument(InputValue::new("chapter", TypeRef::named_nn(TypeRef::INT)))
     .argument(InputValue::new("verse",   TypeRef::named_nn(TypeRef::INT)))
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indexmap::IndexMap;
+    use serde_json::json;
+
+    fn row_with_components(components: serde_json::Value) -> fw_graph_types::PgRow {
+        let mut row: fw_graph_types::PgRow = IndexMap::new();
+        row.insert("cached_components".to_string(), PgValue::Json(components));
+        row
+    }
+
+    #[test]
+    fn jsonb_str_field_reads_string_values() {
+        let row = row_with_components(json!({
+            "prefix": "and",
+            "subject": "he",
+            "core": "created",
+            "suffix": null,
+        }));
+        assert_eq!(jsonb_str_field(&row, "cached_components", "prefix").as_deref(), Some("and"));
+        assert_eq!(jsonb_str_field(&row, "cached_components", "subject").as_deref(), Some("he"));
+        assert_eq!(jsonb_str_field(&row, "cached_components", "core").as_deref(), Some("created"));
+        assert_eq!(jsonb_str_field(&row, "cached_components", "suffix"), None);
+        assert_eq!(jsonb_str_field(&row, "cached_components", "nonexistent"), None);
+    }
+
+    #[test]
+    fn jsonb_str_field_null_column_returns_none() {
+        let mut row: fw_graph_types::PgRow = IndexMap::new();
+        row.insert("cached_components".to_string(), PgValue::Null);
+        assert_eq!(jsonb_str_field(&row, "cached_components", "prefix"), None);
+    }
+
+    #[test]
+    fn jsonb_gloss_source_label_map_variant() {
+        // Fingerprint variant: {"Fingerprint": {...}}
+        let row = row_with_components(json!({
+            "gloss_source": {
+                "Fingerprint": {"source": "manual", "adjusted_confidence": 0.9}
+            }
+        }));
+        assert_eq!(jsonb_gloss_source_label(&row, "cached_components"), "Fingerprint");
+    }
+
+    #[test]
+    fn jsonb_gloss_source_label_unit_variant() {
+        // Unit variants (ShortGloss, TokenGloss) serialize as bare strings.
+        let row = row_with_components(json!({"gloss_source": "ShortGloss"}));
+        assert_eq!(jsonb_gloss_source_label(&row, "cached_components"), "ShortGloss");
+    }
+
+    #[test]
+    fn jsonb_gloss_source_label_missing_returns_empty() {
+        let row = row_with_components(json!({}));
+        assert_eq!(jsonb_gloss_source_label(&row, "cached_components"), String::new());
+
+        let mut row: fw_graph_types::PgRow = IndexMap::new();
+        row.insert("cached_components".to_string(), PgValue::Null);
+        assert_eq!(jsonb_gloss_source_label(&row, "cached_components"), String::new());
+    }
 }
