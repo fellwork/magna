@@ -16,6 +16,7 @@ use fw_decode::theology::{
 use fw_graph_types::PgValue;
 
 use crate::executor::RequestConnection;
+use super::db::load_outline_path;
 use super::structs::*;
 
 // ── Column helpers (mirrors reader.rs) ──────────────────────────────────────
@@ -116,19 +117,26 @@ LIMIT 1
         PgValue::Int(verse),
     ]).await.map_err(|e| async_graphql::Error::new(format!("pericope_units query: {e}")))?;
 
-    Ok(rows.first().map(|row| {
-        let pericope_ref = text_col(row, "pericope_ref");
-        let title = text_col(row, "title");
-        let pericope = if pericope_ref.is_empty() {
-            None
-        } else {
-            Some(PericopeInfoTocma { r#ref: pericope_ref, title })
-        };
-        LiteraryUnitsStep {
-            pericope,
-            outline_path: vec![],
-            clause_depth: None,
-        }
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+
+    // Load the outline ancestry (root-to-leaf) from tocma_step2_outline_nodes.
+    // Returns [] for uncovered verses — that's the expected state for books
+    // outside the 8,541-row partial coverage set.
+    let outline_path = load_outline_path(conn, book, chapter, verse).await?;
+
+    let pericope_ref = text_col(row, "pericope_ref");
+    let title = text_col(row, "title");
+    let pericope = if pericope_ref.is_empty() {
+        None
+    } else {
+        Some(PericopeInfoTocma { r#ref: pericope_ref, title })
+    };
+    Ok(Some(LiteraryUnitsStep {
+        pericope,
+        outline_path,
+        clause_depth: None,
     }))
 }
 

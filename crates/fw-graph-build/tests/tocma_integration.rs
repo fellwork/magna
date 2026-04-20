@@ -53,6 +53,8 @@ fn tocma_structs_are_clonable() {
 mod e2e {
     use fw_graph_build::resolve::tocma::verse::fetch_genre_step;
     use fw_graph_build::resolve::tocma::verse::fetch_passage_tokens;
+    use fw_graph_build::resolve::tocma::verse::fetch_literary_units_step;
+    use fw_graph_build::resolve::tocma::db::load_outline_path;
     use fw_graph_build::resolve::tocma::input::assemble_theology_input;
     use fw_graph_build::executor::RequestConnection;
 
@@ -114,5 +116,63 @@ mod e2e {
         ).await;
         // Should complete without panic; data may be empty
         assert_eq!(input.book, "Obad");
+    }
+
+    /// TOCMA Fix B regression: `outline_path` must no longer be hardcoded `[]`.
+    ///
+    /// `tocma_step2_outline_nodes` has 8,541 rows in production. This test
+    /// hits a verse known to fall inside a pericope with outline coverage
+    /// (Rom 1:16-17) and asserts the ancestry chain is returned root-to-leaf.
+    #[tokio::test]
+    async fn outline_path_rom_1_16_has_ancestry() {
+        let conn = make_conn().await;
+        let path = load_outline_path(&conn, "Rom", 1, 16)
+            .await
+            .expect("outline_path query failed");
+        // Production coverage is partial — if this assertion ever starts
+        // failing in CI without a schema change, verify tocma_step2_outline_nodes
+        // still has rows linked to Rom 1:16 via pm_clauses.
+        assert!(
+            !path.is_empty(),
+            "Rom 1:16 should have outline_path coverage in tocma_step2_outline_nodes; \
+             got empty Vec (fix regressed or coverage dropped)"
+        );
+        for label in &path {
+            assert!(!label.is_empty(), "outline_path labels must be non-empty");
+        }
+    }
+
+    /// For an uncovered verse, the loader must return an empty `Vec`, not error.
+    /// Obadiah is Tier 3/4 in the coverage audit — no tocma_step2 coverage expected.
+    #[tokio::test]
+    async fn outline_path_uncovered_verse_is_empty_not_error() {
+        let conn = make_conn().await;
+        let path = load_outline_path(&conn, "Obad", 1, 1)
+            .await
+            .expect("outline_path query must not error on uncovered verses");
+        assert!(
+            path.is_empty(),
+            "Obad 1:1 has no tocma_step2 coverage; expected empty Vec, got {} labels",
+            path.len()
+        );
+    }
+
+    /// `fetch_literary_units_step` now delegates to `load_outline_path`.
+    /// Verifies the full resolver path (pericope_units JOIN + outline CTE).
+    #[tokio::test]
+    async fn literary_units_step_rom_1_16_has_outline_path() {
+        let conn = make_conn().await;
+        let step = fetch_literary_units_step(&conn, "Rom", 1, 16)
+            .await
+            .expect("literary_units query failed")
+            .expect("Rom 1:16 must have a literary_units step");
+        assert!(
+            step.pericope.is_some(),
+            "Rom 1:16 must resolve to a pericope"
+        );
+        assert!(
+            !step.outline_path.is_empty(),
+            "literary_units.outline_path must be populated for Rom 1:16"
+        );
     }
 }
