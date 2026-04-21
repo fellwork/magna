@@ -35,7 +35,7 @@ struct DoctrineMap {
 }
 
 static DOCTRINE_MAP: OnceLock<DoctrineMap> = OnceLock::new();
-const CONFIG_TOML: &str = include_str!("../../../../../../config/doctrine-lemmas.toml");
+const CONFIG_TOML: &str = include_str!("../../../../../config/doctrine-lemmas.toml");
 
 fn get_doctrine_map() -> &'static DoctrineMap {
     DOCTRINE_MAP.get_or_init(|| {
