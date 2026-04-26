@@ -9,7 +9,7 @@ use axum::{
     http::HeaderMap,
     response::IntoResponse,
 };
-use fw_graph_build::executor::RequestConnection;
+use fw_graph_build::RequestConnection;
 
 /// Main GraphQL POST handler.
 ///

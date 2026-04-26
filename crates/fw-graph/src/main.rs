@@ -88,10 +88,19 @@ async fn main() {
 
     // 10. Build GraphQL schema from gathered output.
     // store_cache = None: the binary runs against live Postgres, not local stores.
+    // extensions = &[]: this binary is intentionally domain-neutral — it serves
+    // a generic Postgres-derived schema. Fellwork-specific resolvers are wired
+    // by `apps/api` via `fw_resolvers::FellworkExtension`. When this crate
+    // becomes the public `magna` binary, consumers wire their own extensions.
     let schema =
-        build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None).expect("build_schema failed");
+        build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None, &[]).expect("build_schema failed");
 
-    info!("graphql schema built");
+    info!(
+        extensions = "none",
+        "graphql schema built (domain-neutral mode — no SchemaExtensions wired). \
+         If you expected Fellwork-specific fields like depthInsights or wordGraph, \
+         use apps/api instead, which wires fw_resolvers::FellworkExtension."
+    );
 
     // 11. Start subscription manager (background task).
     match PgSubscriptionManager::new(pool.clone()).await {
@@ -175,7 +184,7 @@ async fn watch_for_reload(
                 // Re-build schema.
                 // store_cache = None: hot-reload stays on live Postgres.
                 let new_schema =
-                    match build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None) {
+                    match build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None, &[]) {
                         Ok(s) => s,
                         Err(e) => {
                             error!(error = %e, "re-build_schema failed — keeping current schema");

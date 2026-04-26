@@ -1,5 +1,5 @@
 pub mod error;
-pub mod executor;
+pub(crate) mod executor;
 pub mod gather;
 pub mod ir;
 pub mod naming;
@@ -9,6 +9,7 @@ pub mod resolve;
 pub mod smart_tags;
 pub mod type_map;
 pub mod union_step;
+pub mod extension;
 
 pub use error::BuildError;
 pub use gather::gather;
@@ -18,6 +19,8 @@ pub use ir::{
 };
 pub use plan_resolver::PlanContext;
 pub use union_step::{PgUnionStep, TaggedRow};
+pub use extension::{ExtensionContext, SchemaExtension};
+pub use executor::{QueryExecutor, RequestConnection};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -27,22 +30,7 @@ use async_graphql::Value;
 use fw_store::client::StoreCache;
 use sqlx::PgPool;
 
-use executor::QueryExecutor;
 use executor::dataloader::DataLoaderRegistry;
-use resolve::alignment::{build_passage_alignment_resolver, register_alignment_types};
-use resolve::graph::{
-    build_concept_thread_resolver, build_related_verses_resolver, build_verse_context_resolver,
-    register_graph_types,
-};
-use resolve::reader::{
-    concept_alignments_field, connected_insights_field, depth_insights_field,
-    discovery_heat_field, genre_sections_field, literary_context_field,
-    literary_structures_field, main_ideas_field, pericope_context_field,
-    pericope_drilldown_field, register_reader_types, verse_pericope_field,
-};
-use resolve::reader_blocks::{phrased_block_type, phrased_blocks_field};
-use resolve::word_graph::{register_word_graph_types, word_graph_field};
-use resolve::word_study::{register_word_study_types, word_study_field};
 use resolve::mutation::{build_create_resolver, build_delete_resolver, build_update_resolver};
 use resolve::query::{build_allx_resolver, build_by_pk_resolver};
 use resolve::relation::{build_belongs_to_resolver, build_has_many_resolver};
@@ -71,6 +59,7 @@ pub fn build_schema(
     behaviors: &HashMap<String, BehaviorSet>,
     pool: PgPool,
     store_cache: Option<StoreCache>,
+    extensions: &[Box<dyn SchemaExtension>],
 ) -> Result<Schema, BuildError> {
     // 1. Determine if we need a Mutation root.
     let has_mutations = behaviors.values().any(|bs| {
@@ -230,19 +219,15 @@ pub fn build_schema(
     // 11. Register condition types for all resources
     builder = register_condition_types(builder, &output.resources);
 
-    // 11b. Register custom graph output types (ConceptEdge, VerseXref, VerseContext, AlignedClause)
-    builder = register_graph_types(builder);
-    builder = register_alignment_types(builder);
-    builder = register_reader_types(builder);
-    builder = builder.register(phrased_block_type());
-    builder = register_word_graph_types(builder);
-    builder = register_word_study_types(builder);
-
-    // 11c. Register TOCMA resolver types (Steps 1-12 + TheologyInput)
-    builder = resolve::tocma::verse::register_verse_types(builder);
-    builder = resolve::tocma::pericope::register_pericope_types(builder);
-    builder = resolve::tocma::theology::register_theology_types(builder);
-    builder = resolve::tocma::input::register_input_types(builder);
+    // 11b. Let extensions register custom types BEFORE query/mutation field construction
+    //      so extensions can reference auto-generated types in their field signatures.
+    builder = extension::run_extension_phase(
+        builder,
+        &mut query,
+        None,
+        extensions,
+        extension::Phase::RegisterTypes,
+    );
 
     // 12. Build Query root fields using real resolver factories.
     for resource in &output.resources {
@@ -255,31 +240,14 @@ pub fn build_schema(
         }
     }
 
-    // 12b. Register concept-graph traversal and alignment fields
-    query = query.field(build_concept_thread_resolver(executor.clone()));
-    query = query.field(build_related_verses_resolver(executor.clone()));
-    query = query.field(build_verse_context_resolver(executor.clone()));
-    query = query.field(build_passage_alignment_resolver(executor.clone()));
-    query = query.field(concept_alignments_field(executor.clone()));
-    query = query.field(depth_insights_field(executor.clone()));
-    query = query.field(pericope_context_field(executor.clone()));
-    query = query.field(discovery_heat_field(executor.clone()));
-    query = query.field(genre_sections_field(executor.clone()));
-    query = query.field(literary_structures_field(executor.clone()));
-    query = query.field(main_ideas_field(executor.clone()));
-    query = query.field(literary_context_field(executor.clone()));
-    query = query.field(phrased_blocks_field(executor.clone()));
-    query = query.field(connected_insights_field(executor.clone()));
-    query = query.field(verse_pericope_field(executor.clone()));
-    query = query.field(pericope_drilldown_field(executor.clone()));
-    query = query.field(word_graph_field(executor.clone()));
-    query = query.field(word_study_field(executor.clone()));
-
-    // TOCMA root queries
-    query = query.field(resolve::tocma::verse::tocma_verse_field());
-    query = query.field(resolve::tocma::pericope::tocma_pericope_field());
-    query = query.field(resolve::tocma::theology::tocma_pericope_full_field());
-    query = query.field(resolve::tocma::input::theology_input_field());
+    // 12b. Let extensions add Query root fields.
+    builder = extension::run_extension_phase(
+        builder,
+        &mut query,
+        None,
+        extensions,
+        extension::Phase::ExtendQuery,
+    );
 
     // 13. Build Mutation root using real resolver factories.
     if has_mutations {
@@ -308,6 +276,15 @@ pub fn build_schema(
         for field in func_mutation_fields {
             mutation = mutation.field(field);
         }
+
+        // 13b. Let extensions add Mutation root fields.
+        builder = extension::run_extension_phase(
+            builder,
+            &mut query,
+            Some(&mut mutation),
+            extensions,
+            extension::Phase::ExtendMutation,
+        );
 
         builder = builder.register(mutation);
     }
@@ -499,7 +476,7 @@ mod integration_tests {
         let registry = make_registry(&intro);
 
         let output = gather(&intro, &registry, &preset).expect("gather failed");
-        let result = build_schema(&output, &output.behaviors, test_pool(), None);
+        let result = build_schema(&output, &output.behaviors, test_pool(), None, &[]);
 
         assert!(result.is_ok(), "build_schema should succeed: {:?}", result.err());
     }
@@ -511,7 +488,7 @@ mod integration_tests {
         let registry = make_registry(&intro);
 
         let output = gather(&intro, &registry, &preset).expect("gather failed");
-        let schema = build_schema(&output, &output.behaviors, test_pool(), None).expect("build_schema failed");
+        let schema = build_schema(&output, &output.behaviors, test_pool(), None, &[]).expect("build_schema failed");
 
         let sdl = schema.sdl();
 

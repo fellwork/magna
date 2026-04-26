@@ -183,7 +183,7 @@ async fn test_build_schema_from_local_supabase() {
         }
     };
 
-    let schema = build_schema(&output, &output.behaviors, pool.clone());
+    let schema = build_schema(&output, &output.behaviors, pool.clone(), None, &[]);
     assert!(schema.is_ok(), "Schema build failed: {:?}", schema.err());
 
     let schema = schema.unwrap();
@@ -237,7 +237,7 @@ async fn test_schema_sdl_stats() {
         }
     };
 
-    let schema = build_schema(&output, &output.behaviors, pool.clone()).unwrap();
+    let schema = build_schema(&output, &output.behaviors, pool.clone(), None, &[]).unwrap();
     let sdl = schema.sdl();
 
     // Count types, queries, mutations
@@ -270,7 +270,7 @@ async fn test_execute_introspection_query() {
         }
     };
 
-    let schema = build_schema(&output, &output.behaviors, pool.clone()).unwrap();
+    let schema = build_schema(&output, &output.behaviors, pool.clone(), None, &[]).unwrap();
 
     // Execute a standard introspection query
     let query = r#"{ __schema { queryType { name } mutationType { name } types { name } } }"#;
@@ -327,7 +327,7 @@ async fn test_allx_query_returns_rows() {
         ..fw_graph_config::Preset::default()
     };
     let output = gather(&intro, &registry, &preset).expect("gather failed");
-    let schema = build_schema(&output, &output.behaviors, pool.clone()).expect("build_schema failed");
+    let schema = build_schema(&output, &output.behaviors, pool.clone(), None, &[]).expect("build_schema failed");
 
     let resource_name = output.resources.first().expect("at least one resource");
     let field_name = fw_graph_build::naming::all_query_field_name(&resource_name.name);
@@ -338,7 +338,7 @@ async fn test_allx_query_returns_rows() {
     );
 
     let claims = anon_claims();
-    let req_conn = fw_graph_build::executor::RequestConnection::new(&pool, &claims)
+    let req_conn = fw_graph_build::RequestConnection::new(&pool, &claims)
         .await
         .expect("RequestConnection::new failed");
 
@@ -375,7 +375,7 @@ async fn test_by_pk_query_no_crash() {
         ..fw_graph_config::Preset::default()
     };
     let output = gather(&intro, &registry, &preset).expect("gather failed");
-    let schema = build_schema(&output, &output.behaviors, pool.clone()).expect("build_schema failed");
+    let schema = build_schema(&output, &output.behaviors, pool.clone(), None, &[]).expect("build_schema failed");
 
     // Find a resource with a single UUID PK.
     let resource = output.resources.iter().find(|r| {
@@ -398,7 +398,7 @@ async fn test_by_pk_query_no_crash() {
     );
 
     let claims = anon_claims();
-    let req_conn = fw_graph_build::executor::RequestConnection::new(&pool, &claims)
+    let req_conn = fw_graph_build::RequestConnection::new(&pool, &claims)
         .await
         .expect("RequestConnection::new failed");
 
