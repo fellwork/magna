@@ -1,0 +1,5 @@
+# Fellwork shared clippy configuration.
+# See https://rust-lang.github.io/rust-clippy/master/index.html
+
+avoid-breaking-exported-api = false
+msrv = "1.74"

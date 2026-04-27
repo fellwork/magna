@@ -1,0 +1,10 @@
+target/
+Cargo.lock.bak
+**/*.rs.bk
+*.pdb
+.idea/
+.DS_Store
+Thumbs.db
+.env
+.env.local
+*.log

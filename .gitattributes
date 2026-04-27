@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+*.json     text eol=lf
+*.jsonc    text eol=lf
+*.yaml     text eol=lf
+*.yml      text eol=lf
+*.md       text eol=lf
+*.ts       text eol=lf
+*.tsx      text eol=lf
+*.js       text eol=lf
+*.mjs      text eol=lf
+*.cjs      text eol=lf
+*.toml     text eol=lf
+*.rs       text eol=lf
+
+bun.lock         text eol=lf -diff
+Cargo.lock       text eol=lf -diff
