@@ -1,0 +1,10 @@
+[package]
+name        = "magna-sql"
+description = "Composable SQL AST builder producing parameterized Postgres queries — the Rust equivalent of pg-sql2"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+magna-types = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }

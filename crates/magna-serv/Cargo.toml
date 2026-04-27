@@ -1,0 +1,26 @@
+[package]
+name    = "magna-serv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+magna-types  = { path = "../magna-types" }
+magna-core   = { path = "../magna-core" }
+magna-config = { path = "../magna-config" }
+magna-build  = { path = "../magna-build" }
+axum            = { workspace = true }
+tokio           = { workspace = true }
+tower           = { workspace = true }
+tower-http      = { workspace = true }
+async-graphql   = { workspace = true }
+async-graphql-axum = { workspace = true }
+sqlx            = { workspace = true }
+jsonwebtoken    = { workspace = true }
+dashmap         = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
+uuid            = { workspace = true }
+chrono          = { workspace = true }
+tracing         = { workspace = true }
+thiserror       = { workspace = true }
+futures-util    = "0.3"

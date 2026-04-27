@@ -1,0 +1,12 @@
+[package]
+name    = "magna-config"
+description = "Plugin and preset configuration system for the magna engine — composable presets, plugin trait, and behavior control"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+magna-types = { workspace = true }
+serde          = { workspace = true }
+serde_json     = { workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }

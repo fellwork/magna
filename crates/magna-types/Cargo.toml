@@ -1,0 +1,13 @@
+[package]
+name    = "magna-types"
+description = "Shared types for the magna query planning engine — StepResult, PgValue, JwtClaims, errors"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+thiserror   = { workspace = true }
+indexmap     = { workspace = true }

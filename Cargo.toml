@@ -1,0 +1,85 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/magna-types",
+    "crates/magna-core",
+    "crates/magna-sql",
+    "crates/magna-introspect",
+    "crates/magna-dataplan",
+    "crates/magna-config",
+    "crates/magna-build",
+    "crates/magna-serv",
+    "crates/magna-subscriptions",
+    "crates/magna-remote",
+    "crates/magna",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/fellwork/magna"
+authors = ["Shane McGuirt <srmcguirt@gmail.com>"]
+
+[workspace.dependencies]
+# Internal workspace crates (so members can use `{ workspace = true }`)
+magna-types         = { path = "crates/magna-types" }
+magna-core          = { path = "crates/magna-core" }
+magna-sql           = { path = "crates/magna-sql" }
+magna-introspect    = { path = "crates/magna-introspect" }
+magna-dataplan      = { path = "crates/magna-dataplan" }
+magna-config        = { path = "crates/magna-config" }
+magna-build         = { path = "crates/magna-build" }
+magna-serv          = { path = "crates/magna-serv" }
+magna-subscriptions = { path = "crates/magna-subscriptions" }
+magna-remote        = { path = "crates/magna-remote" }
+
+# Core async + serialization
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+thiserror   = "1"
+tokio       = { version = "1", features = ["full"] }
+tracing     = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+async-trait = "0.1"
+futures-util = "0.3"
+
+# UUID + time
+uuid    = { version = "1", features = ["v4", "v5", "serde"] }
+chrono  = { version = "0.4", features = ["serde"] }
+
+# Postgres + GraphQL stack
+sqlx           = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "macros"] }
+async-graphql  = { version = "7", features = ["dataloader", "tracing", "uuid", "chrono"] }
+async-graphql-axum = "7"
+axum           = { version = "0.8", features = ["ws", "macros"] }
+tower          = "0.5"
+tower-http     = { version = "0.6", features = ["cors", "trace", "compression-gzip"] }
+
+# Auth
+jsonwebtoken   = { version = "10", default-features = false, features = ["rust_crypto"] }
+
+# Caching + collections
+moka           = { version = "0.12", features = ["future"] }
+dashmap        = "6"
+indexmap       = "2"
+
+# CLI + config
+clap           = { version = "4", features = ["derive", "env"] }
+dotenvy        = "0.15"
+toml           = "0.8"
+
+# Misc
+base64         = "0.22"
+notify         = { version = "7", default-features = false, features = ["macos_fsevent"] }
+petgraph       = "0.6"
+sha2           = "0.10"
+regex          = "1"
+
+# HTTP client (for magna-remote Tier 3 webhook resolvers)
+reqwest        = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,15 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+type: 'library'
+language: 'rust'
+
+tasks:
+  build:
+    command: 'cargo build -p magna-dataplan'
+    inputs: ['src/**/*.rs', 'Cargo.toml']
+
+  test:
+    command: 'cargo test -p magna-dataplan'
+    inputs: ['src/**/*.rs', 'Cargo.toml']
+    deps:
+      - '~:build'

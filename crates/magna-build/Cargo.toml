@@ -1,0 +1,24 @@
+[package]
+name    = "magna-build"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+magna-types      = { path = "../magna-types" }
+magna-core       = { path = "../magna-core" }
+magna-sql        = { path = "../magna-sql" }
+magna-introspect = { path = "../magna-introspect" }
+magna-dataplan   = { path = "../magna-dataplan" }
+magna-config     = { path = "../magna-config" }
+async-graphql       = { workspace = true }
+async-trait         = { workspace = true }
+sqlx                = { workspace = true }
+tokio               = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+tracing             = { workspace = true }
+thiserror           = { workspace = true }
+base64              = { workspace = true }
+indexmap            = { workspace = true }
+uuid                = { workspace = true }
+chrono              = { workspace = true }

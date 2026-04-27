@@ -1,0 +1,28 @@
+[package]
+name    = "magna"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "magna"
+path = "src/main.rs"
+
+[dependencies]
+magna-types         = { path = "../magna-types" }
+magna-core          = { path = "../magna-core" }
+magna-sql           = { path = "../magna-sql" }
+magna-introspect    = { path = "../magna-introspect" }
+magna-dataplan      = { path = "../magna-dataplan" }
+magna-config        = { path = "../magna-config" }
+magna-build         = { path = "../magna-build" }
+magna-serv          = { path = "../magna-serv" }
+magna-subscriptions = { path = "../magna-subscriptions" }
+axum                   = { workspace = true }
+tokio                  = { workspace = true }
+sqlx                   = { workspace = true }
+serde                  = { workspace = true }
+serde_json             = { workspace = true }
+tracing                = { workspace = true }
+tracing-subscriber     = { workspace = true }
+clap                   = { workspace = true }
+dotenvy                = { workspace = true }

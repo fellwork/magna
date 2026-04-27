@@ -1,0 +1,19 @@
+[package]
+name    = "magna-subscriptions"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+magna-types   = { path = "../magna-types" }
+magna-core    = { path = "../magna-core" }
+magna-dataplan = { path = "../magna-dataplan" }
+magna-serv    = { path = "../magna-serv" }
+sqlx             = { workspace = true }
+tokio            = { workspace = true }
+async-trait      = { workspace = true }
+dashmap          = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+uuid             = { workspace = true }
+tracing          = { workspace = true }
+thiserror        = { workspace = true }

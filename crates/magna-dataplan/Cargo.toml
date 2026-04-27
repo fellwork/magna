@@ -1,0 +1,23 @@
+[package]
+name        = "magna-dataplan"
+description = "Postgres data-plan steps — bridges magna-core execution engine with Postgres via magna-sql and magna-introspect"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+magna-types      = { workspace = true }
+magna-core       = { workspace = true }
+magna-sql        = { workspace = true }
+magna-introspect = { workspace = true }
+# NOTE: async-graphql is NOT listed here. This is intentional.
+# magna-dataplan is a data layer — it has no knowledge of GraphQL types.
+sqlx                = { workspace = true }
+tokio               = { workspace = true }
+async-trait         = { workspace = true }
+serde               = { workspace = true }
+serde_json          = { workspace = true }
+tracing             = { workspace = true }
+uuid                = { workspace = true }
+indexmap             = { workspace = true }
+thiserror           = { workspace = true }
+chrono              = { workspace = true }
