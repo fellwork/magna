@@ -27,7 +27,6 @@ use std::sync::Arc;
 
 use async_graphql::dynamic::{Field, FieldFuture, Object, Schema};
 use async_graphql::Value;
-use fw_store::client::StoreCache;
 use sqlx::PgPool;
 
 use executor::dataloader::DataLoaderRegistry;
@@ -51,14 +50,14 @@ use register::scalars::register_scalars;
 /// Orchestrates all registration passes in the correct order and returns
 /// a finished `async_graphql::dynamic::Schema`.
 ///
-/// When `store_cache` is provided, reader resolvers serve data from local
-/// JSON store files instead of querying the database. This enables local
-/// development without Docker/Supabase.
+/// To inject schema-level data (caches, feature-flag clients, tracers) that
+/// resolvers can read at request time, an extension calls
+/// [`ExtensionContext::add_data`] from one of its hooks. This keeps the
+/// engine domain-neutral.
 pub fn build_schema(
     output: &GatherOutput,
     behaviors: &HashMap<String, BehaviorSet>,
     pool: PgPool,
-    store_cache: Option<StoreCache>,
     extensions: &[Box<dyn SchemaExtension>],
 ) -> Result<Schema, BuildError> {
     // 1. Determine if we need a Mutation root.
@@ -299,14 +298,11 @@ pub fn build_schema(
     builder = builder.register(query);
 
     // 16. Store executor and DataLoaderRegistry as schema data for resolvers.
+    //     Extensions inject any other schema-data via ExtensionContext::add_data
+    //     during their hooks (run before this point).
     let registry = Arc::new(registry);
     builder = builder.data(registry);
     builder = builder.data(executor);
-
-    // 16b. Inject StoreCache for file-backed reader resolvers (local dev).
-    if let Some(cache) = store_cache {
-        builder = builder.data(cache);
-    }
 
     // 17. Apply limits and finish
     builder = builder.limit_complexity(200).limit_depth(10);
@@ -476,7 +472,7 @@ mod integration_tests {
         let registry = make_registry(&intro);
 
         let output = gather(&intro, &registry, &preset).expect("gather failed");
-        let result = build_schema(&output, &output.behaviors, test_pool(), None, &[]);
+        let result = build_schema(&output, &output.behaviors, test_pool(), &[]);
 
         assert!(result.is_ok(), "build_schema should succeed: {:?}", result.err());
     }
@@ -488,7 +484,7 @@ mod integration_tests {
         let registry = make_registry(&intro);
 
         let output = gather(&intro, &registry, &preset).expect("gather failed");
-        let schema = build_schema(&output, &output.behaviors, test_pool(), None, &[]).expect("build_schema failed");
+        let schema = build_schema(&output, &output.behaviors, test_pool(), &[]).expect("build_schema failed");
 
         let sdl = schema.sdl();
 

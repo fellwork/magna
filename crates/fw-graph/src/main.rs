@@ -93,7 +93,7 @@ async fn main() {
     // by `apps/api` via `fw_resolvers::FellworkExtension`. When this crate
     // becomes the public `magna` binary, consumers wire their own extensions.
     let schema =
-        build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None, &[]).expect("build_schema failed");
+        build_schema(&gather_output, &gather_output.behaviors, pool.clone(), &[]).expect("build_schema failed");
 
     info!(
         extensions = "none",
@@ -184,7 +184,7 @@ async fn watch_for_reload(
                 // Re-build schema.
                 // store_cache = None: hot-reload stays on live Postgres.
                 let new_schema =
-                    match build_schema(&gather_output, &gather_output.behaviors, pool.clone(), None, &[]) {
+                    match build_schema(&gather_output, &gather_output.behaviors, pool.clone(), &[]) {
                         Ok(s) => s,
                         Err(e) => {
                             error!(error = %e, "re-build_schema failed — keeping current schema");

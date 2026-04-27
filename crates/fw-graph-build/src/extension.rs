@@ -74,6 +74,29 @@ impl<'a> ExtensionContext<'a> {
         self.builder = Some(builder.register(ty));
     }
 
+    /// Inject arbitrary schema-level data that resolvers can later read via
+    /// `ctx.data::<T>()` at request time. Available in every phase.
+    ///
+    /// This is the extension-friendly way to make per-process state visible
+    /// to resolvers without baking it into `build_schema`'s signature.
+    /// Examples: a local-development cache, a feature-flag client, a tenant
+    /// resolver, an OpenTelemetry tracer.
+    ///
+    /// `T` must be `Any + Send + Sync` because `async-graphql` stores it in
+    /// a typed map keyed by `TypeId` and shares it across the schema's
+    /// `Send`-safe execution.
+    ///
+    /// # Example
+    /// ```ignore
+    /// fn register_types(&self, ctx: &mut ExtensionContext<'_>) {
+    ///     ctx.add_data(self.cache.clone()); // resolvers read via ctx.data::<MyCache>()
+    /// }
+    /// ```
+    pub fn add_data<T: std::any::Any + Send + Sync>(&mut self, data: T) {
+        let builder = self.take_builder("add_data");
+        self.builder = Some(builder.data(data));
+    }
+
     /// Add a field to the Query root. Only valid inside `extend_query`.
     /// Panics if called from `register_types` or `extend_mutation`.
     ///
@@ -385,5 +408,46 @@ mod tests {
             ))
         });
         assert_eq!(obj.type_name(), "MyObject");
+    }
+
+    #[tokio::test]
+    async fn test_add_data_flows_through_phase_runner() {
+        // Verify the contract: an extension that calls ctx.add_data(value)
+        // during register_types makes that value visible to resolvers via
+        // `ctx.data::<T>()` at request time. This is the pattern Fellwork
+        // uses to inject StoreCache for local-dev reader resolvers.
+        #[derive(Clone, Debug, PartialEq)]
+        struct DataMarker(&'static str);
+
+        struct DataInjector;
+        impl SchemaExtension for DataInjector {
+            fn name(&self) -> &str { "data-injector" }
+            fn register_types(&self, ctx: &mut ExtensionContext<'_>) {
+                ctx.add_data(DataMarker("hello-from-extension"));
+            }
+        }
+
+        // Build a Query with a single field that, when resolved, reads the
+        // injected data and returns its inner string. Then execute the query
+        // and assert the resolver saw the extension-provided data.
+        let builder = async_graphql::dynamic::Schema::build("Query", None, None);
+        let mut query = Object::new("Query").field(Field::new(
+            "marker",
+            TypeRef::named_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let m = ctx.data::<DataMarker>()?;
+                    Ok(Some(async_graphql::Value::from(m.0)))
+                })
+            },
+        ));
+        let exts: Vec<Box<dyn SchemaExtension>> = vec![Box::new(DataInjector)];
+        let builder = run_extension_phase(builder, &mut query, None, &exts, Phase::RegisterTypes);
+        let schema = builder.register(query).finish().expect("schema must finish");
+
+        let res = schema.execute("{ marker }").await;
+        assert!(res.errors.is_empty(), "execution errors: {:?}", res.errors);
+        let data = res.data.into_json().expect("response must be JSON");
+        assert_eq!(data["marker"], "hello-from-extension");
     }
 }

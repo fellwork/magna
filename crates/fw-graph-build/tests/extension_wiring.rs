@@ -139,7 +139,7 @@ async fn extensions_invoked_when_provided() {
     let extensions: Vec<Box<dyn SchemaExtension>> = vec![Box::new(ext)];
     let output = empty_gather();
 
-    let schema = build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+    let schema = build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
         .expect("build_schema must succeed with empty gather");
 
     // RegisterTypes ran once. ExtendQuery ran once. ExtendMutation didn't run
@@ -183,7 +183,7 @@ async fn each_extension_hook_fires_exactly_once_with_n_extensions() {
         // Labeled variant for N>1.
         if n == 1 {
             let output = empty_gather();
-            build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+            build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
                 .expect("build_schema must succeed");
             let (rt, eq, em) = &counters[0];
             assert_eq!(rt.load(Ordering::SeqCst), 1, "n={n}: register_types should fire exactly once per extension");
@@ -251,7 +251,7 @@ async fn multiple_extensions_each_hook_once() {
         let extensions: Vec<Box<dyn SchemaExtension>> =
             exts.into_iter().map(|e| Box::new(e) as Box<dyn SchemaExtension>).collect();
         let output = empty_gather();
-        build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+        build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
             .expect("multi-extension build must succeed");
 
         for (i, (rt, eq)) in counters.iter().enumerate() {
@@ -294,7 +294,7 @@ async fn has_mutations_gate_fires_for_each_individual_mutation_flag() {
         let extensions: Vec<Box<dyn SchemaExtension>> = vec![Box::new(ext)];
         let output = gather_with_resource("widget", bs);
 
-        build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+        build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
             .unwrap_or_else(|e| panic!("{label}: build_schema must succeed: {e:?}"));
 
         assert_eq!(
@@ -312,7 +312,7 @@ async fn empty_extensions_slice_does_not_break_build() {
     // canonical happy path for the no-extension case.
     let extensions: Vec<Box<dyn SchemaExtension>> = vec![];
     let output = empty_gather();
-    let schema = build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+    let schema = build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
         .expect("build_schema with no extensions must succeed");
     let sdl = schema.sdl();
     assert!(!sdl.is_empty(), "empty-extension schema still has SDL");
@@ -367,7 +367,7 @@ async fn extensions_fire_in_slice_order_within_each_phase() {
         Box::new(JournaledExt { label: "beta",  journal: journal.clone() }),
     ];
     let output = empty_gather();
-    build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+    build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
         .expect("multi-extension build must succeed");
 
     let recorded = journal.lock().unwrap().clone();
@@ -439,7 +439,7 @@ async fn cross_extension_type_reference_proves_per_phase_barrier() {
         }),
     ];
     let output = empty_gather();
-    build_schema(&output, &output.behaviors, lazy_pool(), None, &extensions)
+    build_schema(&output, &output.behaviors, lazy_pool(), &extensions)
         .expect("cross-extension type reference must succeed");
 
     // The side-channel proves the per-phase barrier independently of SDL.
