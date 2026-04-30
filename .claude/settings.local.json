@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(command -v agentsdb)",
+      "Bash(agentsdb --version)",
+      "Bash(bash ~/.claude/skills/fw-agent-skill/install-into-repo.sh)",
+      "Bash(find .claude .mcp.json AGENTS*)",
+      "Bash(agentsdb compile *)",
+      "Bash(agentsdb serve *)",
+      "Bash(agentsdb init *)",
+      "Bash(bash .claude/scripts/cloud-setup.sh)",
+      "Bash(agentsdb search *)"
+    ]
+  }
+}
