@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "agentsdb": {
+      "type": "stdio",
+      "command": "agentsdb",
+      "args": [
+        "serve",
+        "--base",
+        "C:/git/fellwork/magna/AGENTS.db",
+        "--user",
+        "C:/git/fellwork/magna/AGENTS.user.db",
+        "--delta",
+        "C:/git/fellwork/magna/AGENTS.delta.db",
+        "--local",
+        "C:/git/fellwork/magna/AGENTS.local.db"
+      ],
+      "env": {}
+    }
+  }
+}
