@@ -11,6 +11,7 @@ members = [
     "crates/magna-serv",
     "crates/magna-subscriptions",
     "crates/magna-remote",
+    "crates/magna-gqlmin",
     "crates/magna",
 ]
 
@@ -33,6 +34,7 @@ magna-build         = { path = "crates/magna-build" }
 magna-serv          = { path = "crates/magna-serv" }
 magna-subscriptions = { path = "crates/magna-subscriptions" }
 magna-remote        = { path = "crates/magna-remote" }
+magna-gqlmin        = { path = "crates/magna-gqlmin" }
 
 # Core async + serialization
 serde       = { version = "1", features = ["derive"] }

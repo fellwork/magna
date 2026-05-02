@@ -1793,6 +1793,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "magna-gqlmin"
+version = "0.1.0"
+
+[[package]]
 name = "magna-introspect"
 version = "0.1.0"
 dependencies = [

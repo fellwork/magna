@@ -1,0 +1,48 @@
+[package]
+name        = "magna-gqlmin"
+description = "Lightweight GraphQL parser — operations-only at runtime, optional SDL/validation/pretty-error opts. Experimental."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+# Default native-Rust build: ops parser + std formatting helpers.
+default = ["ops", "std"]
+
+# Always-on operations parser. Splitting it out lets the wasm/no_std build
+# stay minimal and keeps feature lists explicit.
+ops = []
+
+# Pull in std; required by `pretty`, `validate`, and any host-side glue.
+std = []
+
+# Type-system definitions (schema-language). Feature-gated; not in this round.
+sdl = []
+
+# Validation rules. Requires `sdl` and `std`.
+validate = ["sdl", "std"]
+
+# Caret/line error rendering. Requires `std`.
+pretty = ["std"]
+
+# Serde derives on AST. Used by napi binding to emit JSON.
+serde = []
+
+# napi-rs binding. Pulls in serde transitively.
+napi = ["serde", "std"]
+
+# Pure no_std + extern "C" wasm exports. NO wasm-bindgen.
+wasm = ["ops"]
+
+# Opt-in fatter wasm escape hatch via wasm-bindgen.
+wasm-bindgen = ["wasm"]
+
+[dependencies]
+# Goal: zero runtime deps. Re-evaluate per round.
+
+[dev-dependencies]
