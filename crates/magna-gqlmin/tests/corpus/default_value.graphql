@@ -1,0 +1,5 @@
+query Q($limit: Int = 25, $sort: String = "asc") {
+  items(limit: $limit, sort: $sort) {
+    id
+  }
+}

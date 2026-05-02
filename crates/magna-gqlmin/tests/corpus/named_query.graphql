@@ -1,0 +1,4 @@
+query MyQuery {
+  hello
+  world
+}

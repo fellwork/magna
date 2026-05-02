@@ -1,0 +1,11 @@
+{
+  hero {
+    name
+    ... on Droid {
+      primaryFunction
+    }
+    ... on Human {
+      homePlanet
+    }
+  }
+}

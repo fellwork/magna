@@ -1,0 +1,3 @@
+{
+  greet(message: "héllo, 世界 é")
+}

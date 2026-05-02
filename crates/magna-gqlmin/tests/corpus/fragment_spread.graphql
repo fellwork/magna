@@ -1,0 +1,8 @@
+{
+  user {
+    ...UserFields
+    posts {
+      title
+    }
+  }
+}

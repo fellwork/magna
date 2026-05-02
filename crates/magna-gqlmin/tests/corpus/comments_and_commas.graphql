@@ -1,0 +1,6 @@
+# top-level comment
+query Q {
+  # field comment
+  a, b, c
+  d(x: 1, y: 2) # inline trailing comment
+}
