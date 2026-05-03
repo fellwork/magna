@@ -167,16 +167,51 @@ or a minimal serializer; do not add `insta` as a dependency.
 - AST stability: free-to-break in 0.x minors
 - Wasm target: generic `wasm32-unknown-unknown`, browser-tuned
 - Validation: 10 starter rules
+- Wasm AST: bumpalo-arena, `Document<'src, 'bump>` (decided post-R2)
+
+## Structural size constraint (R2 finding)
+
+Empirical measurement in R2 found the original 5,120-byte budget cannot be
+met with `Vec<T>`-based AST collections on stable Rust. The 7 distinct
+`Vec<T>` types in the parser (`Vec<Definition>`, `Vec<VariableDefinition>`,
+`Vec<Directive>`, `Vec<Argument>`, `Vec<Selection>`, `Vec<ObjectField>`,
+`Vec<Value>`) generate ~10 KB gz of monomorphized grow/drop/realloc code.
+The Architect's 1.5 KB parser estimate implicitly assumed a non-Vec design.
+
+Risk ladder exhausted in R2:
+
+| Rung | Action | Measured gz |
+|---|---|---|
+| 0 baseline | dlmalloc, full ops parser | 15,783 |
+| 1 | Gate Debug derives + Display behind cfg(std) | 15,375 |
+| 2 | from_utf8_unchecked in wasm shim | (in rung 1) |
+| 3 | Switch to wee_alloc | ~13,978 |
+| 4 | Drop block-string parsing | not tried (API change) |
+| 5 | Accept 7 KB ceiling | exceeded — N/A |
+
+**Decision (locked by user, post-R2):** Option A — bumpalo arena. Replace
+the 7 `Vec<T>` fields with `bumpalo::collections::Vec<'bump, T>`.
+Document API gains a second lifetime: `Document<'src, 'bump>`. New optional
+runtime dep: `bumpalo`. Estimated gz: 4,000–7,000 bytes (R3 will measure).
+
+Wasm ABI confirmed working in R2 via Node smoke test:
+- `simple_query.graphql` → tag=0 (success)
+- `empty_selection_error.graphql` → tag=1, kind=34 (parse error)
+
+This ABI is durable — future rounds must not break it.
 
 ## Round log
+
+> Defect class: "structural fix — bumpalo arena migration" started after R2 surface. Iteration counter reset to 0/5 per playbook (work nature shifted from "build to spec" to "fix structural mismatch").
 
 | Round | Steps | Status | Evidence |
 |---|---|---|---|
 | R1 | 1–4 (skeleton, features, lexer, ops parser) | ✅ DONE | 18 lexer tests + 20/20 corpus; 5/5 valid spec probes + 3/3 invalid rejections; all bans honored |
+| R2 | 5–6 (wasm shim, SIZE.md, CI gate, smoke) | ⚠️ PARTIAL | wasm builds + smoke passes (tag=0/tag=1+kind=34); 38 R1 tests still pass; gz=15375 vs 5120 budget — surface to user; user chose Option A (bumpalo arena) |
 
-## Open questions (none currently active)
+## Open questions
 
-All five Architect open questions resolved by autonomous-mode defaults.
+(R3 measurement-pending: actual gz post-bumpalo migration; if still > 5,120 bytes, fall back to Option B span-indexed rewrite or accept revised target.)
 
 ## Latest director-note
 
