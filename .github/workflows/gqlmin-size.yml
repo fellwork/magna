@@ -1,0 +1,60 @@
+name: gqlmin-size
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/magna-gqlmin/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gqlmin-size.yml"
+  pull_request:
+    paths:
+      - "crates/magna-gqlmin/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gqlmin-size.yml"
+
+jobs:
+  gqlmin-size:
+    name: wasm size gate (≤ 5120 bytes gz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          wget -q https://github.com/WebAssembly/binaryen/releases/download/version_119/binaryen-version_119-x86_64-linux.tar.gz
+          tar xzf binaryen-version_119-x86_64-linux.tar.gz -C /tmp
+          echo "/tmp/binaryen-version_119/bin" >> $GITHUB_PATH
+
+      - name: Build wasm runtime
+        run: |
+          cargo build -p magna-gqlmin \
+            --target wasm32-unknown-unknown \
+            --no-default-features --features "ops,wasm" \
+            --profile release-wasm
+
+      - name: Optimize with wasm-opt
+        run: |
+          wasm-opt -Oz --strip-debug --vacuum \
+            --enable-bulk-memory --enable-sign-ext \
+            target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+            -o /tmp/gqlmin.opt.wasm
+
+      - name: Measure and gate
+        run: |
+          SIZE=$(gzip -9 -c /tmp/gqlmin.opt.wasm | wc -c)
+          echo "gzipped size: $SIZE bytes"
+          echo "budget: 5120 bytes"
+          if [ "$SIZE" -gt 5120 ]; then
+            echo "FAIL: $SIZE bytes exceeds 5120-byte budget"
+            echo "See crates/magna-gqlmin/SIZE.md for risk-ladder status and docs/investigation-r2-wasm-size.md for root-cause analysis."
+            exit 1
+          fi
+          echo "PASS: $SIZE bytes is within budget"
