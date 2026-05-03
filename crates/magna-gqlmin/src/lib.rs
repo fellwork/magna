@@ -53,9 +53,10 @@ mod wasm;
 pub use error::{ParseError, ParseErrorKind};
 pub use lex::{Lexer, Span, Token, TokenKind};
 pub use parse::{
-    Argument, Definition, Directive, Document, Field, FragmentDefinition, InlineFragment,
-    Name, ObjectField, OperationDefinition, OperationKind, Selection, SelectionSet, StringValue,
-    Type, Value, VariableDefinition,
+    Argument, Definition, Directive, Document, Field, FragmentDefinition, FragmentSpread,
+    InlineFragment, Name, NamedType, Node, NodeRange, NodeSlice, ObjectField,
+    OperationDefinition, OperationKind, Selection, SelectionSet, StringValue, Type, Value,
+    VariableDefinition,
 };
 
 /// Parse an executable GraphQL document (operations + fragment definitions).
