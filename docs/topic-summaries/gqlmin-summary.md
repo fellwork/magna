@@ -167,7 +167,7 @@ or a minimal serializer; do not add `insta` as a dependency.
 - AST stability: free-to-break in 0.x minors
 - Wasm target: generic `wasm32-unknown-unknown`, browser-tuned
 - Validation: 10 starter rules
-- Wasm AST: bumpalo-arena, `Document<'src, 'bump>` (decided post-R2)
+- Wasm AST: span-indexed flat arrays, `Document<'src>` single lifetime (decided post-R3 after Option A refuted; R5 implements)
 
 ## Structural size constraint (R2 finding)
 
@@ -200,6 +200,46 @@ Wasm ABI confirmed working in R2 via Node smoke test:
 
 This ABI is durable — future rounds must not break it.
 
+## R3 outcome — bumpalo refuted
+
+R3 measured the bumpalo migration (Option A): gz=17,490 bytes — **+2,115 bytes
+worse than R2 baseline.** Iron Law fires (>7,000 byte ceiling).
+
+**Durable lesson:** bumpalo is NOT a free win on the wasm-size axis even when
+it correctly collapses Vec<T> monomorphizations. Bumpalo's `RawVec` and
+`Bump::alloc_layout_*` panic paths reach `panic!`/`format_args!` call sites
+that transitively pull in `core::str` Debug formatting and Unicode `printable.rs`
+property tables (~3 KB gz of new strings + tables), plus the bumpalo crate
+itself adds ~1 KB gz. `panic = "abort"` does not strip these — it skips
+unwind, not format-string emission.
+
+**Function count signal:** R3 confirmed the R2 Vec-monomorphization analysis
+was correct (150 → 90 functions). The size regression came from new code
+introduced by bumpalo, not from the Vec collapse failing.
+
+**Rule for future rounds:** any arena-allocator candidate must be measured
+for panic-path bloat BEFORE committing to migration. The size axis is
+sensitive to transitive `core::fmt` reachability, not just data-structure
+choice.
+
+| Round | Approach | gz bytes |
+|---|---|---|
+| R2 baseline (Vec, dlmalloc, Debug-gated) | original | 15,375 |
+| R2 + wee_alloc swap | tuning | 13,978 |
+| R3 (bumpalo arena, Option A) | refuted | 17,490 |
+| Iron Law ceiling | — | 7,000 |
+| Original budget | — | 5,120 |
+
+**Decision (locked by user, post-R3):** Option B — span-indexed flat arrays.
+Replace `Vec<T>` collections with index ranges into shared backing buffers.
+Public API stays `Document<'src>` (single lifetime). No new runtime deps.
+No bumpalo. Implementation is parser-internals rewrite. Estimated gz: 3–5 KB
+(per Director R3 analysis). R5 implements; tuning rounds R6+ as needed.
+
+**Bumpalo dep status:** R5 must remove the `bumpalo` dep from Cargo.toml
+along with the AST migration revert. The `dep:bumpalo` entry under the `ops`
+feature must be removed.
+
 ## Round log
 
 > Defect class: "structural fix — bumpalo arena migration" started after R2 surface. Iteration counter reset to 0/5 per playbook (work nature shifted from "build to spec" to "fix structural mismatch").
@@ -208,10 +248,16 @@ This ABI is durable — future rounds must not break it.
 |---|---|---|---|
 | R1 | 1–4 (skeleton, features, lexer, ops parser) | ✅ DONE | 18 lexer tests + 20/20 corpus; 5/5 valid spec probes + 3/3 invalid rejections; all bans honored |
 | R2 | 5–6 (wasm shim, SIZE.md, CI gate, smoke) | ⚠️ PARTIAL | wasm builds + smoke passes (tag=0/tag=1+kind=34); 38 R1 tests still pass; gz=15375 vs 5120 budget — surface to user; user chose Option A (bumpalo arena) |
+| R3 | Option A: bumpalo arena migration (structural fix) | ❌ BLOCKED (Iron Law) | gz=17,490 (Δ=+2,115 vs R2). Vec collapse worked (150→90 fns) but bumpalo's panic paths pulled in core::str fmt + Unicode tables (~3 KB) + bumpalo crate (~1 KB), exceeding the savings. ABI/tests intact. |
+| R4 | Step 7 (napi scaffold) + step 9 partial (5 of 10 ops-only validation rules) + step 10 partial (pretty errors, serde feature scaffold) — parallel with R3 | ✅ DONE | 5 pretty + 12 validation + 1 serde-smoke tests; all feature combos compile; threaded `Document<'src, 'bump>` lifetime via 1 fix-up commit |
 
 ## Open questions
 
-(R3 measurement-pending: actual gz post-bumpalo migration; if still > 5,120 bytes, fall back to Option B span-indexed rewrite or accept revised target.)
+- R5 measurement-pending: actual gz post-span-indexed implementation; if
+  still > 5,120 bytes, R6+ tuning rounds attack the next-largest bloat
+  source (likely panic strings, alloc bookkeeping, or LLVM intrinsics).
+- Open: do we need to revert R3's bumpalo commits before R5, or just remove
+  the dep and rewrite forward? (R5 brief specifies the cleaner path.)
 
 ## Latest director-note
 
