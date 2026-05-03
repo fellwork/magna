@@ -98,6 +98,19 @@ as unparsed lexemes (caller decodes). Public types: `Document`,
 `gqlmin_parse`, `gqlmin_result_free`. Custom binary AST encoding; JS-side
 decoder is sibling `@magna/gqlmin-wasm` package, NOT in the wasm budget.
 
+### Error code wire format
+
+`ParseErrorKind` discriminants are partitioned by range so the JS-side
+decoder (`@magna/gqlmin-wasm`) can branch without importing the Rust
+enum:
+
+- Lexer errors: `1..=5`
+- Parser errors: `32..=43`
+
+The gap is intentional. Rule for adding new kinds: append within the
+correct range; do not fill the gap. JS decoders branch on `kind < 32`
+to dispatch lex-vs-parse error rendering.
+
 **Napi:** `parseExecutableDocument(src: string)` returning JSON via
 `serde_json`. No size constraint.
 
@@ -154,6 +167,12 @@ or a minimal serializer; do not add `insta` as a dependency.
 - AST stability: free-to-break in 0.x minors
 - Wasm target: generic `wasm32-unknown-unknown`, browser-tuned
 - Validation: 10 starter rules
+
+## Round log
+
+| Round | Steps | Status | Evidence |
+|---|---|---|---|
+| R1 | 1–4 (skeleton, features, lexer, ops parser) | ✅ DONE | 18 lexer tests + 20/20 corpus; 5/5 valid spec probes + 3/3 invalid rejections; all bans honored |
 
 ## Open questions (none currently active)
 
