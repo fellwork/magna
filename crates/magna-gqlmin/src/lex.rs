@@ -102,14 +102,14 @@ impl<'src> Lexer<'src> {
     pub fn slice(&self, span: Span) -> &'src str {
         // span values originate from the lexer; they are always within bounds
         // and on UTF-8 boundaries (we only step by ASCII inside multi-byte
-        // tokens).
+        // tokens). Use `get` (returning Option) instead of `[..]` indexing so
+        // the `core::str::index` panic path — which transitively reaches the
+        // Unicode `printable.rs` property tables via Debug formatting — stays
+        // unreachable. Fallback to the empty string on the impossible bad-span
+        // case; the dead-stripper can't observe this and inline.
         let s = span.start as usize;
         let e = span.end as usize;
-        // SAFETY-equivalent without unsafe: defensive bound clamp.
-        let s = if s > self.src.len() { self.src.len() } else { s };
-        let e = if e > self.src.len() { self.src.len() } else { e };
-        let s = if s > e { e } else { s };
-        &self.src[s..e]
+        self.src.get(s..e).unwrap_or("")
     }
 
     /// Advance and return the next token (or an error).
@@ -133,7 +133,10 @@ impl<'src> Lexer<'src> {
             });
         }
 
-        let b = self.bytes[start];
+        // `get(i).copied().unwrap_or(0)` keeps `core::slice::index` panic paths
+        // unreachable. The bound was already checked above; the fallback `0`
+        // is a defensive default that never matches any token start byte.
+        let b = self.bytes.get(start).copied().unwrap_or(0);
         match b {
             b'!' => self.single(TokenKind::Bang),
             b'$' => self.single(TokenKind::Dollar),
@@ -174,10 +177,10 @@ impl<'src> Lexer<'src> {
         // Skip ASCII whitespace, line terminators, commas, comments. The spec
         // treats these as "insignificant" outside of string literals.
         loop {
-            if self.pos >= self.bytes.len() {
-                return;
-            }
-            let b = self.bytes[self.pos];
+            let b = match self.bytes.get(self.pos) {
+                Some(&b) => b,
+                None => return,
+            };
             match b {
                 b' ' | b'\t' | b'\r' | b'\n' | b',' => {
                     self.pos += 1;
@@ -185,8 +188,7 @@ impl<'src> Lexer<'src> {
                 b'#' => {
                     // Comment to end-of-line.
                     self.pos += 1;
-                    while self.pos < self.bytes.len() {
-                        let c = self.bytes[self.pos];
+                    while let Some(&c) = self.bytes.get(self.pos) {
                         if c == b'\n' || c == b'\r' {
                             break;
                         }
@@ -200,9 +202,8 @@ impl<'src> Lexer<'src> {
 
     fn lex_spread(&mut self) -> Result<Token, ParseError> {
         let start = self.pos;
-        if self.bytes.len() >= start + 3
-            && self.bytes[start + 1] == b'.'
-            && self.bytes[start + 2] == b'.'
+        if self.bytes.get(start + 1).copied() == Some(b'.')
+            && self.bytes.get(start + 2).copied() == Some(b'.')
         {
             self.pos = start + 3;
             return Ok(Token {
@@ -220,8 +221,7 @@ impl<'src> Lexer<'src> {
         let start = self.pos;
         // First byte already verified by caller match arm.
         self.pos += 1;
-        while self.pos < self.bytes.len() {
-            let b = self.bytes[self.pos];
+        while let Some(&b) = self.bytes.get(self.pos) {
             let ok = matches!(b, b'_' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z');
             if !ok {
                 break;
@@ -345,33 +345,32 @@ impl<'src> Lexer<'src> {
     fn lex_string(&mut self) -> Result<Token, ParseError> {
         let start = self.pos;
         // Block string: """ ... """
-        if self.bytes.len() >= start + 3
-            && self.bytes[start + 1] == b'"'
-            && self.bytes[start + 2] == b'"'
+        if self.bytes.get(start + 1).copied() == Some(b'"')
+            && self.bytes.get(start + 2).copied() == Some(b'"')
         {
             self.pos = start + 3;
             loop {
-                if self.pos >= self.bytes.len() {
-                    return Err(ParseError::new(
-                        Span::new(start as u32, self.pos as u32),
-                        ParseErrorKind::InvalidBlockString,
-                    ));
-                }
-                let b = self.bytes[self.pos];
+                let b = match self.bytes.get(self.pos) {
+                    Some(&b) => b,
+                    None => {
+                        return Err(ParseError::new(
+                            Span::new(start as u32, self.pos as u32),
+                            ParseErrorKind::InvalidBlockString,
+                        ));
+                    }
+                };
                 if b == b'\\'
-                    && self.bytes.len() >= self.pos + 4
-                    && self.bytes[self.pos + 1] == b'"'
-                    && self.bytes[self.pos + 2] == b'"'
-                    && self.bytes[self.pos + 3] == b'"'
+                    && self.bytes.get(self.pos + 1).copied() == Some(b'"')
+                    && self.bytes.get(self.pos + 2).copied() == Some(b'"')
+                    && self.bytes.get(self.pos + 3).copied() == Some(b'"')
                 {
                     // \""" escape — consume all four bytes.
                     self.pos += 4;
                     continue;
                 }
                 if b == b'"'
-                    && self.bytes.len() >= self.pos + 3
-                    && self.bytes[self.pos + 1] == b'"'
-                    && self.bytes[self.pos + 2] == b'"'
+                    && self.bytes.get(self.pos + 1).copied() == Some(b'"')
+                    && self.bytes.get(self.pos + 2).copied() == Some(b'"')
                 {
                     self.pos += 3;
                     return Ok(Token {
@@ -386,13 +385,15 @@ impl<'src> Lexer<'src> {
         // Regular string.
         self.pos += 1; // skip opening "
         loop {
-            if self.pos >= self.bytes.len() {
-                return Err(ParseError::new(
-                    Span::new(start as u32, self.pos as u32),
-                    ParseErrorKind::InvalidString,
-                ));
-            }
-            let b = self.bytes[self.pos];
+            let b = match self.bytes.get(self.pos) {
+                Some(&b) => b,
+                None => {
+                    return Err(ParseError::new(
+                        Span::new(start as u32, self.pos as u32),
+                        ParseErrorKind::InvalidString,
+                    ));
+                }
+            };
             match b {
                 b'"' => {
                     self.pos += 1;
@@ -410,26 +411,31 @@ impl<'src> Lexer<'src> {
                 }
                 b'\\' => {
                     // Validate escape: \" \\ \/ \b \f \n \r \t \uXXXX
-                    if self.pos + 1 >= self.bytes.len() {
-                        return Err(ParseError::new(
-                            Span::new(start as u32, self.pos as u32),
-                            ParseErrorKind::InvalidEscape,
-                        ));
-                    }
-                    let esc = self.bytes[self.pos + 1];
+                    let esc = match self.bytes.get(self.pos + 1) {
+                        Some(&b) => b,
+                        None => {
+                            return Err(ParseError::new(
+                                Span::new(start as u32, self.pos as u32),
+                                ParseErrorKind::InvalidEscape,
+                            ));
+                        }
+                    };
                     match esc {
                         b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => {
                             self.pos += 2;
                         }
                         b'u' => {
-                            if self.pos + 6 > self.bytes.len() {
-                                return Err(ParseError::new(
-                                    Span::new(start as u32, self.pos as u32),
-                                    ParseErrorKind::InvalidEscape,
-                                ));
-                            }
                             for i in 2..6 {
-                                if !self.bytes[self.pos + i].is_ascii_hexdigit() {
+                                let hx = match self.bytes.get(self.pos + i) {
+                                    Some(&b) => b,
+                                    None => {
+                                        return Err(ParseError::new(
+                                            Span::new(start as u32, self.pos as u32),
+                                            ParseErrorKind::InvalidEscape,
+                                        ));
+                                    }
+                                };
+                                if !hx.is_ascii_hexdigit() {
                                     return Err(ParseError::new(
                                         Span::new(start as u32, (self.pos + i) as u32),
                                         ParseErrorKind::InvalidEscape,
@@ -454,11 +460,7 @@ impl<'src> Lexer<'src> {
     }
 
     fn peek_byte(&self) -> Option<u8> {
-        if self.pos < self.bytes.len() {
-            Some(self.bytes[self.pos])
-        } else {
-            None
-        }
+        self.bytes.get(self.pos).copied()
     }
 }
 

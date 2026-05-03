@@ -292,7 +292,13 @@ impl<'doc, 'src, T: ?Sized + 'doc> core::ops::Index<usize> for NodeSlice<'doc, '
     type Output = T;
     #[inline]
     fn index(&self, i: usize) -> &T {
-        (self.project)(&self.nodes[i])
+        // `get` keeps the `core::slice::index` panic path unreachable from
+        // this site. Out-of-bounds is funnelled through the format-free
+        // `panic_invariant()`.
+        match self.nodes.get(i) {
+            Some(n) => (self.project)(n),
+            None => panic_invariant(),
+        }
     }
 }
 
@@ -518,12 +524,15 @@ impl<'src> Parser<'src> {
     }
 
     fn slice(&self, span: Span) -> &'src str {
+        // Use `get` (returning Option) instead of `[..]` indexing so the
+        // `core::str::index` panic path — which transitively reaches the
+        // Unicode `printable.rs` property tables via Debug formatting —
+        // stays unreachable from the parser hot path. Span values come from
+        // the lexer and are valid by construction; the empty-string fallback
+        // is defensive only.
         let s = span.start as usize;
         let e = span.end as usize;
-        let s = if s > self.src.len() { self.src.len() } else { s };
-        let e = if e > self.src.len() { self.src.len() } else { e };
-        let s = if s > e { e } else { s };
-        &self.src[s..e]
+        self.src.get(s..e).unwrap_or("")
     }
 
     fn expect(&mut self, kind: TokenKind, err: ParseErrorKind) -> Result<Token, ParseError> {
