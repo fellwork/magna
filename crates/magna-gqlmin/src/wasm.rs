@@ -72,10 +72,15 @@ pub unsafe extern "C" fn gqlmin_parse(src_ptr: *const u8, src_len: usize) -> *co
     // call, parse into it, encode the binary result, then drop the arena
     // (freeing the entire AST in O(1)). The wasm-visible ABI is unchanged.
     let bump = bumpalo::Bump::new();
-    match crate::parse_executable_document(&bump, src) {
+    // Bind to a local before the arena drops — the borrow checker would
+    // otherwise tie the implicit block-temporary to `bump`'s lifetime
+    // and fire E0597 (`bump` dropped while still borrowed by the
+    // temporary parse result).
+    let result = match crate::parse_executable_document(&bump, src) {
         Ok(_) => encode_ok(),
         Err(e) => encode_error(e.span.start, e.span.end, e.kind as u8),
-    }
+    };
+    result
 }
 
 /// Free a result buffer returned by `gqlmin_parse`.
