@@ -30,6 +30,9 @@ pub mod error;
 pub mod lex;
 pub mod parse;
 
+#[cfg(feature = "pretty")]
+mod pretty;
+
 #[cfg(feature = "wasm")]
 mod wasm;
 
