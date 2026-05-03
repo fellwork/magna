@@ -31,7 +31,10 @@ validate = ["sdl", "std"]
 pretty = ["std"]
 
 # Serde derives on AST. Used by napi binding to emit JSON.
-serde = []
+# R4: scaffolded only — `dep:serde` wired so the feature compiles, but
+# `#[derive(Serialize, Deserialize)]` on AST types is deferred to a
+# post-R3 round (R3 owns AST shape this round).
+serde = ["dep:serde"]
 
 # napi-rs binding. Pulls in serde transitively.
 napi = ["serde", "std"]
@@ -46,5 +49,12 @@ wasm-bindgen = ["wasm"]
 # Goal: zero runtime deps. Re-evaluate per round.
 # dlmalloc: wasm allocator (optional, only under feature = "wasm").
 dlmalloc = { version = "0.2", optional = true, default-features = false, features = ["global"] }
+
+# R4 host-side optional deps (none of these touch the wasm size budget —
+# all are gated behind features that are not enabled in the wasm build).
+#
+# serde: AST derives are DEFERRED to post-R3 (R3 owns AST shape). For now
+# the feature flag wires the dep so the scaffold compiles.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 
 [dev-dependencies]
