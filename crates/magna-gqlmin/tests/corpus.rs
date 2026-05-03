@@ -6,15 +6,14 @@
 //! span. Bidirectional checks (e.g. `simple_query` has no fragments) are
 //! sprinkled in.
 //!
-//! R3: every test allocates a `bumpalo::Bump` arena before calling the
-//! parser. The arena is dropped at the end of the test function, freeing
-//! the entire AST in O(1).
+//! R5 phase 1: AST is owned by the returned `Document<'src>` (single
+//! lifetime). Dropping the document at end of test frees the AST.
 
 use std::fs;
 use std::path::PathBuf;
 
 use magna_gqlmin::{
-    parse_executable_document, Bump, Definition, ParseErrorKind, Selection, Type, Value,
+    parse_executable_document, Definition, ParseErrorKind, Selection, Type, Value,
 };
 
 fn corpus_path(name: &str) -> PathBuf {
@@ -33,8 +32,7 @@ fn read(name: &str) -> String {
 #[test]
 fn case_simple_query() {
     let src = read("simple_query");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     assert_eq!(doc.definitions.len(), 1, "exactly one definition");
     let Definition::Operation(op) = &doc.definitions[0] else {
         panic!("must be operation");
@@ -49,8 +47,7 @@ fn case_simple_query() {
 #[test]
 fn case_named_query() {
     let src = read("named_query");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let name = op.name.expect("named");
     assert_eq!(name.value, "MyQuery");
@@ -61,14 +58,13 @@ fn case_named_query() {
 #[test]
 fn case_query_with_variables() {
     let src = read("query_with_variables");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     assert_eq!(op.variable_definitions.len(), 2);
     assert_eq!(op.variable_definitions[0].name.value, "id");
     // $id is `ID!` -> NonNull(Named("ID"))
     match &op.variable_definitions[0].var_type {
-        Type::NonNull(inner) => match *inner {
+        Type::NonNull(inner) => match inner.as_ref() {
             Type::Named(n) => assert_eq!(n.name.value, "ID"),
             _ => panic!("expected named inside NonNull"),
         },
@@ -81,8 +77,7 @@ fn case_query_with_variables() {
 fn case_mutation() {
     use magna_gqlmin::OperationKind;
     let src = read("mutation");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     assert_eq!(op.kind, OperationKind::Mutation);
     assert_eq!(op.name.unwrap().value, "CreateUser");
@@ -92,8 +87,7 @@ fn case_mutation() {
 fn case_subscription() {
     use magna_gqlmin::OperationKind;
     let src = read("subscription");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     assert_eq!(op.kind, OperationKind::Subscription);
     assert_eq!(op.variable_definitions.len(), 1);
@@ -102,8 +96,7 @@ fn case_subscription() {
 #[test]
 fn case_fragment_definition() {
     let src = read("fragment_definition");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     assert_eq!(doc.definitions.len(), 2);
     let frag = match &doc.definitions[0] {
         Definition::Fragment(f) => f,
@@ -116,8 +109,7 @@ fn case_fragment_definition() {
 #[test]
 fn case_fragment_spread() {
     let src = read("fragment_spread");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let user = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -137,8 +129,7 @@ fn case_fragment_spread() {
 #[test]
 fn case_inline_fragment_with_type() {
     let src = read("inline_fragment_with_type");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let hero = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -158,8 +149,7 @@ fn case_inline_fragment_with_type() {
 #[test]
 fn case_inline_fragment_no_type() {
     let src = read("inline_fragment_no_type");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let me = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -178,8 +168,7 @@ fn case_inline_fragment_no_type() {
 #[test]
 fn case_nested_directives() {
     let src = read("nested_directives");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let f = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -196,8 +185,7 @@ fn case_nested_directives() {
 #[test]
 fn case_field_alias() {
     let src = read("field_alias");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let mut aliases = 0usize;
     for sel in &op.selection_set.selections {
@@ -215,8 +203,7 @@ fn case_field_alias() {
 #[test]
 fn case_arguments_all_value_kinds() {
     let src = read("arguments_all_value_kinds");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let f = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -248,21 +235,20 @@ fn case_arguments_all_value_kinds() {
 #[test]
 fn case_non_null_list_type() {
     let src = read("non_null_list_type");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let var = &op.variable_definitions[0];
     // [ID!]! -> NonNull(List(NonNull(Named("ID"))))
     let outer = match &var.var_type {
-        Type::NonNull(inner) => *inner,
+        Type::NonNull(inner) => inner.as_ref(),
         _ => panic!("outer must be NonNull"),
     };
     let list_inner = match outer {
-        Type::List(inner) => *inner,
+        Type::List(inner) => inner.as_ref(),
         _ => panic!("middle must be List"),
     };
     let leaf = match list_inner {
-        Type::NonNull(inner) => *inner,
+        Type::NonNull(inner) => inner.as_ref(),
         _ => panic!("inner must be NonNull"),
     };
     match leaf {
@@ -274,8 +260,7 @@ fn case_non_null_list_type() {
 #[test]
 fn case_default_value() {
     let src = read("default_value");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     assert_eq!(op.variable_definitions.len(), 2);
     for vd in &op.variable_definitions {
@@ -287,8 +272,7 @@ fn case_default_value() {
 fn case_multiple_operations() {
     use magna_gqlmin::OperationKind;
     let src = read("multiple_operations");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     assert_eq!(doc.definitions.len(), 3);
     let kinds: Vec<OperationKind> = doc
         .definitions
@@ -311,8 +295,7 @@ fn case_multiple_operations() {
 #[test]
 fn case_block_string_arg() {
     let src = read("block_string_arg");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let f = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -329,8 +312,7 @@ fn case_block_string_arg() {
 #[test]
 fn case_comments_and_commas() {
     let src = read("comments_and_commas");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     // a, b, c, d -> 4 selections (commas insignificant, comments skipped).
     assert_eq!(op.selection_set.selections.len(), 4);
@@ -345,8 +327,7 @@ fn case_comments_and_commas() {
 #[test]
 fn case_unicode_in_strings() {
     let src = read("unicode_in_strings");
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, &src).expect("parses");
+    let doc = parse_executable_document(&src).expect("parses");
     let Definition::Operation(op) = &doc.definitions[0] else { panic!() };
     let f = match &op.selection_set.selections[0] {
         Selection::Field(f) => f,
@@ -364,8 +345,7 @@ fn case_unicode_in_strings() {
 #[test]
 fn case_empty_selection_error() {
     let src = read("empty_selection_error");
-    let bump = Bump::new();
-    let err = parse_executable_document(&bump, &src).expect_err("must error");
+    let err = parse_executable_document(&src).expect_err("must error");
     assert_eq!(err.kind, ParseErrorKind::EmptySelectionSet);
     assert!(err.span.end > err.span.start, "non-empty span");
 }
@@ -373,8 +353,7 @@ fn case_empty_selection_error() {
 #[test]
 fn case_unterminated_string_error() {
     let src = read("unterminated_string_error");
-    let bump = Bump::new();
-    let err = parse_executable_document(&bump, &src).expect_err("must error");
+    let err = parse_executable_document(&src).expect_err("must error");
     assert_eq!(err.kind, ParseErrorKind::InvalidString);
     assert!(err.span.end >= err.span.start, "valid span");
     assert!(err.span.start > 0, "span points past prefix");

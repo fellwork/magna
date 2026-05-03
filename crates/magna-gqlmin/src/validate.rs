@@ -19,12 +19,10 @@
 //! is host-side tooling — it is intentionally not built into the wasm
 //! runtime.
 //!
-//! ## R3-aftermath note
+//! ## R5 note
 //!
-//! The AST carries two lifetimes (`'src` over the input text, `'bump` over
-//! the bumpalo arena). The validator just walks borrowed shared references,
-//! so it doesn't care which arena owns the children — it threads both
-//! lifetimes through opaquely.
+//! The AST is single-lifetime (`Document<'src>`). The validator walks
+//! borrowed shared references; lifetime threading is straightforward.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::vec::Vec;
@@ -58,22 +56,22 @@ pub const RULE_UNIQUE_OPERATION_NAMES: &str = "UniqueOperationNames";
 /// The returned `Vec` is empty iff the document is valid under these rules.
 /// Errors are emitted in a stable, document-order traversal so callers can
 /// rely on the ordering for UI rendering.
-pub fn validate_operations<'src, 'bump>(
-    doc: &Document<'src, 'bump>,
+pub fn validate_operations<'src>(
+    doc: &Document<'src>,
 ) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // Index fragment definitions by name for `KnownFragmentNames` and to
     // support `NoUnusedFragments`. We also collect operations for the
     // variable-rules pass and the unique-names check.
-    let mut fragments_by_name: BTreeMap<&str, &FragmentDefinition<'src, 'bump>> =
+    let mut fragments_by_name: BTreeMap<&str, &FragmentDefinition<'src>> =
         BTreeMap::new();
     // Track usage counts so we can emit a `NoUnusedFragments` error per
     // unused fragment in document order.
     let mut fragment_use_counts: BTreeMap<&str, usize> = BTreeMap::new();
     // Order-preserving list of fragment definitions for the unused pass.
-    let mut fragment_defs_in_order: Vec<&FragmentDefinition<'src, 'bump>> = Vec::new();
-    let mut operations: Vec<&OperationDefinition<'src, 'bump>> = Vec::new();
+    let mut fragment_defs_in_order: Vec<&FragmentDefinition<'src>> = Vec::new();
+    let mut operations: Vec<&OperationDefinition<'src>> = Vec::new();
 
     for def in &doc.definitions {
         match def {
@@ -142,8 +140,8 @@ pub fn validate_operations<'src, 'bump>(
 
 // --- UniqueOperationNames -----------------------------------------------
 
-fn check_unique_operation_names<'src, 'bump>(
-    operations: &[&OperationDefinition<'src, 'bump>],
+fn check_unique_operation_names<'src>(
+    operations: &[&OperationDefinition<'src>],
     errors: &mut Vec<ValidationError>,
 ) {
     // Anonymous-only-if-sole rule: if any op is anonymous AND there's more
@@ -178,9 +176,9 @@ fn check_unique_operation_names<'src, 'bump>(
 
 // --- NoUndefinedVariables / NoUnusedVariables ---------------------------
 
-fn check_variables_for_operation<'src, 'bump>(
-    op: &OperationDefinition<'src, 'bump>,
-    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src, 'bump>>,
+fn check_variables_for_operation<'src>(
+    op: &OperationDefinition<'src>,
+    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src>>,
     errors: &mut Vec<ValidationError>,
 ) {
     // Declared variables (preserve declaration order via Vec; lookup via
@@ -239,9 +237,9 @@ fn check_variables_for_operation<'src, 'bump>(
     }
 }
 
-fn collect_variable_uses_in_selection_set<'src, 'bump>(
-    selection_set: &SelectionSet<'src, 'bump>,
-    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src, 'bump>>,
+fn collect_variable_uses_in_selection_set<'src>(
+    selection_set: &SelectionSet<'src>,
+    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src>>,
     visited_frags: &mut BTreeSet<&'src str>,
     out: &mut BTreeMap<&'src str, Span>,
 ) {
@@ -299,8 +297,8 @@ fn collect_variable_uses_in_selection_set<'src, 'bump>(
     }
 }
 
-fn collect_variable_uses_in_directives<'src, 'bump>(
-    directives: &[Directive<'src, 'bump>],
+fn collect_variable_uses_in_directives<'src>(
+    directives: &[Directive<'src>],
     out: &mut BTreeMap<&'src str, Span>,
 ) {
     for d in directives {
@@ -308,8 +306,8 @@ fn collect_variable_uses_in_directives<'src, 'bump>(
     }
 }
 
-fn collect_variable_uses_in_directive<'src, 'bump>(
-    d: &Directive<'src, 'bump>,
+fn collect_variable_uses_in_directive<'src>(
+    d: &Directive<'src>,
     out: &mut BTreeMap<&'src str, Span>,
 ) {
     for a in &d.arguments {
@@ -317,15 +315,15 @@ fn collect_variable_uses_in_directive<'src, 'bump>(
     }
 }
 
-fn collect_variable_uses_in_argument<'src, 'bump>(
-    a: &Argument<'src, 'bump>,
+fn collect_variable_uses_in_argument<'src>(
+    a: &Argument<'src>,
     out: &mut BTreeMap<&'src str, Span>,
 ) {
     collect_variable_uses_in_value(&a.value, out);
 }
 
-fn collect_variable_uses_in_value<'src, 'bump>(
-    v: &Value<'src, 'bump>,
+fn collect_variable_uses_in_value<'src>(
+    v: &Value<'src>,
     out: &mut BTreeMap<&'src str, Span>,
 ) {
     match v {
@@ -351,9 +349,9 @@ fn collect_variable_uses_in_value<'src, 'bump>(
 
 // --- KnownFragmentNames / NoUnusedFragments -----------------------------
 
-fn walk_fragment_spreads<'src, 'bump>(
-    selection_set: &SelectionSet<'src, 'bump>,
-    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src, 'bump>>,
+fn walk_fragment_spreads<'src>(
+    selection_set: &SelectionSet<'src>,
+    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src>>,
     use_counts: &mut BTreeMap<&'src str, usize>,
     errors: &mut Vec<ValidationError>,
 ) {

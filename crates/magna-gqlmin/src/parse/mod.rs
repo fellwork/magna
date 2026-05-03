@@ -4,47 +4,35 @@
 //! Hand-rolled LL(1) recursive descent over the lexer. One token of
 //! lookahead via `Parser { peeked: Option<Token> }`. No backtracking.
 //!
-//! ### Arena-allocated AST (R3)
+//! ### AST storage (R5 — phase 1 baseline)
 //!
-//! All list collections in the AST are stored as
-//! [`bumpalo::collections::Vec<'bump, T>`]. The seven distinct
-//! `alloc::vec::Vec<T>` types from R1/R2 (`Definition`,
-//! `VariableDefinition`, `Directive`, `Argument`, `Selection`,
-//! `ObjectField`, `Value::List`) collapsed into one monomorphization
-//! against `bumpalo::Bump`. See `docs/investigation-r2-wasm-size.md`.
-//!
-//! The AST therefore carries TWO lifetimes:
-//!
-//! * `'src` — the borrow over the input GraphQL text. Identifiers,
-//!   numeric lexemes, and string raw-text all reference the input.
-//! * `'bump` — the borrow over the caller-owned `bumpalo::Bump`.
-//!   Every list field lives in this arena. Dropping the arena drops
-//!   the entire AST in O(1).
-//!
-//! Callers construct an arena and pass it to
-//! [`parse_executable_document`]. The arena is owned by the caller;
-//! the parser does not allocate new arenas.
+//! Phase 1 of R5 reverts R3's bumpalo migration in favor of plain
+//! `alloc::vec::Vec<T>` collections, restoring the single-lifetime
+//! `Document<'src>` shape from R2. Phase 3 of R5 then collapses those
+//! `Vec<T>` types into a single span-indexed flat-array layout to recover
+//! the wasm-size budget without re-introducing bumpalo's panic-path bloat.
+//! See `docs/investigation-r5-span-indexed-design.md`.
 
-use bumpalo::collections::Vec as BVec;
-use bumpalo::Bump;
+use alloc::vec::Vec;
 
 use crate::error::{ParseError, ParseErrorKind};
 use crate::lex::{Lexer, Span, Token, TokenKind};
+use alloc::boxed::Box;
 
 // --- AST ----------------------------------------------------------------
 
 /// Top-level executable document: a non-empty list of definitions.
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct Document<'src, 'bump> {
-    pub definitions: BVec<'bump, Definition<'src, 'bump>>,
+pub struct Document<'src> {
+    pub definitions: Vec<Definition<'src>>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub enum Definition<'src, 'bump> {
-    Operation(OperationDefinition<'src, 'bump>),
-    Fragment(FragmentDefinition<'src, 'bump>),
+pub enum Definition<'src> {
+    Operation(OperationDefinition<'src>),
+    Fragment(FragmentDefinition<'src>),
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
@@ -57,12 +45,12 @@ pub enum OperationKind {
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct OperationDefinition<'src, 'bump> {
+pub struct OperationDefinition<'src> {
     pub kind: OperationKind,
     pub name: Option<Name<'src>>,
-    pub variable_definitions: BVec<'bump, VariableDefinition<'src, 'bump>>,
-    pub directives: BVec<'bump, Directive<'src, 'bump>>,
-    pub selection_set: SelectionSet<'src, 'bump>,
+    pub variable_definitions: Vec<VariableDefinition<'src>>,
+    pub directives: Vec<Directive<'src>>,
+    pub selection_set: SelectionSet<'src>,
     pub span: Span,
     /// True for `{ ... }` shorthand queries (no `query` keyword, no name).
     pub shorthand: bool,
@@ -70,11 +58,11 @@ pub struct OperationDefinition<'src, 'bump> {
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct FragmentDefinition<'src, 'bump> {
+pub struct FragmentDefinition<'src> {
     pub name: Name<'src>,
     pub type_condition: NamedType<'src>,
-    pub directives: BVec<'bump, Directive<'src, 'bump>>,
-    pub selection_set: SelectionSet<'src, 'bump>,
+    pub directives: Vec<Directive<'src>>,
+    pub selection_set: SelectionSet<'src>,
     pub span: Span,
 }
 
@@ -93,82 +81,78 @@ pub struct NamedType<'src> {
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct VariableDefinition<'src, 'bump> {
+pub struct VariableDefinition<'src> {
     pub name: Name<'src>,
-    pub var_type: Type<'src, 'bump>,
-    pub default_value: Option<Value<'src, 'bump>>,
-    pub directives: BVec<'bump, Directive<'src, 'bump>>,
+    pub var_type: Type<'src>,
+    pub default_value: Option<Value<'src>>,
+    pub directives: Vec<Directive<'src>>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct Directive<'src, 'bump> {
+pub struct Directive<'src> {
     pub name: Name<'src>,
-    pub arguments: BVec<'bump, Argument<'src, 'bump>>,
+    pub arguments: Vec<Argument<'src>>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct Argument<'src, 'bump> {
+pub struct Argument<'src> {
     pub name: Name<'src>,
-    pub value: Value<'src, 'bump>,
+    pub value: Value<'src>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct SelectionSet<'src, 'bump> {
-    pub selections: BVec<'bump, Selection<'src, 'bump>>,
+pub struct SelectionSet<'src> {
+    pub selections: Vec<Selection<'src>>,
     pub span: Span,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub enum Selection<'src, 'bump> {
-    Field(Field<'src, 'bump>),
-    FragmentSpread(FragmentSpread<'src, 'bump>),
-    InlineFragment(InlineFragment<'src, 'bump>),
+pub enum Selection<'src> {
+    Field(Field<'src>),
+    FragmentSpread(FragmentSpread<'src>),
+    InlineFragment(InlineFragment<'src>),
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct Field<'src, 'bump> {
+pub struct Field<'src> {
     pub alias: Option<Name<'src>>,
     pub name: Name<'src>,
-    pub arguments: BVec<'bump, Argument<'src, 'bump>>,
-    pub directives: BVec<'bump, Directive<'src, 'bump>>,
-    pub selection_set: Option<SelectionSet<'src, 'bump>>,
+    pub arguments: Vec<Argument<'src>>,
+    pub directives: Vec<Directive<'src>>,
+    pub selection_set: Option<SelectionSet<'src>>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct FragmentSpread<'src, 'bump> {
+pub struct FragmentSpread<'src> {
     pub name: Name<'src>,
-    pub directives: BVec<'bump, Directive<'src, 'bump>>,
+    pub directives: Vec<Directive<'src>>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct InlineFragment<'src, 'bump> {
+pub struct InlineFragment<'src> {
     pub type_condition: Option<NamedType<'src>>,
-    pub directives: BVec<'bump, Directive<'src, 'bump>>,
-    pub selection_set: SelectionSet<'src, 'bump>,
-}
-
-/// `Type` references arena-allocated `Type` nodes for `List`/`NonNull`
-/// wrappers. The previous `alloc::boxed::Box<Type>` representation was
-/// kept zero-copy by replacing `Box` with `&'bump Type<'src, 'bump>` —
-/// the inner type lives in the same `Bump` arena as the rest of the AST.
-#[cfg_attr(any(feature = "std", test), derive(Debug))]
-#[derive(Clone, Copy, PartialEq)]
-pub enum Type<'src, 'bump> {
-    Named(NamedType<'src>),
-    List(&'bump Type<'src, 'bump>),
-    NonNull(&'bump Type<'src, 'bump>),
+    pub directives: Vec<Directive<'src>>,
+    pub selection_set: SelectionSet<'src>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub enum Value<'src, 'bump> {
+pub enum Type<'src> {
+    Named(NamedType<'src>),
+    List(Box<Type<'src>>),
+    NonNull(Box<Type<'src>>),
+}
+
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone, PartialEq)]
+pub enum Value<'src> {
     Variable(Name<'src>),
     /// Unparsed integer lexeme (e.g. `"-42"`). Caller decodes.
     Int(&'src str),
@@ -180,8 +164,8 @@ pub enum Value<'src, 'bump> {
     Boolean(bool),
     Null,
     Enum(Name<'src>),
-    List(BVec<'bump, Value<'src, 'bump>>),
-    Object(BVec<'bump, ObjectField<'src, 'bump>>),
+    List(Vec<Value<'src>>),
+    Object(Vec<ObjectField<'src>>),
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
@@ -194,41 +178,34 @@ pub struct StringValue<'src> {
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
 #[derive(Clone, PartialEq)]
-pub struct ObjectField<'src, 'bump> {
+pub struct ObjectField<'src> {
     pub name: Name<'src>,
-    pub value: Value<'src, 'bump>,
+    pub value: Value<'src>,
 }
 
 // --- Public entry point -------------------------------------------------
 
-/// Parse an executable document into a bumpalo-arena-backed AST.
-///
-/// The caller owns the arena. The returned `Document` borrows from
-/// both `arena` (for list collections + boxed `Type` nodes) and `src`
-/// (for identifiers and unparsed lexemes). Dropping the arena drops
-/// the AST in O(1).
-pub fn parse_executable_document<'src, 'bump>(
-    arena: &'bump Bump,
+/// Parse an executable document. The returned `Document` borrows
+/// identifiers and lexemes from `src`; AST list collections are owned
+/// by the document (R5 phase 1: `alloc::vec::Vec`).
+pub fn parse_executable_document<'src>(
     src: &'src str,
-) -> Result<Document<'src, 'bump>, ParseError> {
-    let mut p = Parser::new(arena, src);
-    let doc = p.parse_document()?;
-    Ok(doc)
+) -> Result<Document<'src>, ParseError> {
+    let mut p = Parser::new(src);
+    p.parse_document()
 }
 
 // --- Parser -------------------------------------------------------------
 
-struct Parser<'src, 'bump> {
-    arena: &'bump Bump,
+struct Parser<'src> {
     src: &'src str,
     lexer: Lexer<'src>,
     peeked: Option<Token>,
 }
 
-impl<'src, 'bump> Parser<'src, 'bump> {
-    fn new(arena: &'bump Bump, src: &'src str) -> Self {
+impl<'src> Parser<'src> {
+    fn new(src: &'src str) -> Self {
         Self {
-            arena,
             src,
             lexer: Lexer::new(src),
             peeked: None,
@@ -271,8 +248,8 @@ impl<'src, 'bump> Parser<'src, 'bump> {
 
     // --- Productions ----------------------------------------------------
 
-    fn parse_document(&mut self) -> Result<Document<'src, 'bump>, ParseError> {
-        let mut defs = BVec::new_in(self.arena);
+    fn parse_document(&mut self) -> Result<Document<'src>, ParseError> {
+        let mut defs = Vec::new();
         loop {
             let t = self.peek()?;
             if t.kind == TokenKind::Eof {
@@ -289,7 +266,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         Ok(Document { definitions: defs })
     }
 
-    fn parse_definition(&mut self) -> Result<Definition<'src, 'bump>, ParseError> {
+    fn parse_definition(&mut self) -> Result<Definition<'src>, ParseError> {
         let t = self.peek()?;
         match t.kind {
             TokenKind::LBrace => Ok(Definition::Operation(self.parse_shorthand_query()?)),
@@ -307,15 +284,15 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         }
     }
 
-    fn parse_shorthand_query(&mut self) -> Result<OperationDefinition<'src, 'bump>, ParseError> {
+    fn parse_shorthand_query(&mut self) -> Result<OperationDefinition<'src>, ParseError> {
         let start = self.peek()?.span.start;
         let selection_set = self.parse_selection_set()?;
         let end = selection_set.span.end;
         Ok(OperationDefinition {
             kind: OperationKind::Query,
             name: None,
-            variable_definitions: BVec::new_in(self.arena),
-            directives: BVec::new_in(self.arena),
+            variable_definitions: Vec::new(),
+            directives: Vec::new(),
             selection_set,
             span: Span::new(start, end),
             shorthand: true,
@@ -324,7 +301,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
 
     fn parse_operation_definition(
         &mut self,
-    ) -> Result<OperationDefinition<'src, 'bump>, ParseError> {
+    ) -> Result<OperationDefinition<'src>, ParseError> {
         let kw_tok = self.bump_tok()?; // consume keyword
         let kind = match self.slice(kw_tok.span) {
             "query" => OperationKind::Query,
@@ -342,7 +319,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         let variable_definitions = if self.peek()?.kind == TokenKind::LParen {
             self.parse_variable_definitions()?
         } else {
-            BVec::new_in(self.arena)
+            Vec::new()
         };
 
         let directives = self.parse_directives()?;
@@ -359,7 +336,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         })
     }
 
-    fn parse_fragment_definition(&mut self) -> Result<FragmentDefinition<'src, 'bump>, ParseError> {
+    fn parse_fragment_definition(&mut self) -> Result<FragmentDefinition<'src>, ParseError> {
         let kw_tok = self.bump_tok()?; // 'fragment'
         let name = self.parse_name()?;
         // 'on' keyword
@@ -396,10 +373,10 @@ impl<'src, 'bump> Parser<'src, 'bump> {
 
     fn parse_variable_definitions(
         &mut self,
-    ) -> Result<BVec<'bump, VariableDefinition<'src, 'bump>>, ParseError> {
+    ) -> Result<Vec<VariableDefinition<'src>>, ParseError> {
         // (
         self.expect(TokenKind::LParen, ParseErrorKind::UnexpectedToken)?;
-        let mut out = BVec::new_in(self.arena);
+        let mut out = Vec::new();
         loop {
             let t = self.peek()?;
             if t.kind == TokenKind::RParen {
@@ -431,7 +408,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         Ok(out)
     }
 
-    fn parse_type(&mut self) -> Result<Type<'src, 'bump>, ParseError> {
+    fn parse_type(&mut self) -> Result<Type<'src>, ParseError> {
         let t = self.peek()?;
         let inner = match t.kind {
             TokenKind::Name => {
@@ -442,7 +419,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
                 self.bump_tok()?; // [
                 let elem = self.parse_type()?;
                 self.expect(TokenKind::RBracket, ParseErrorKind::UnclosedDelimiter)?;
-                Type::List(self.arena.alloc(elem))
+                Type::List(Box::new(elem))
             }
             _ => {
                 return Err(ParseError::new(t.span, ParseErrorKind::ExpectedType));
@@ -450,30 +427,30 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         };
         if self.peek()?.kind == TokenKind::Bang {
             self.bump_tok()?;
-            Ok(Type::NonNull(self.arena.alloc(inner)))
+            Ok(Type::NonNull(Box::new(inner)))
         } else {
             Ok(inner)
         }
     }
 
-    fn parse_directives(&mut self) -> Result<BVec<'bump, Directive<'src, 'bump>>, ParseError> {
-        let mut out = BVec::new_in(self.arena);
+    fn parse_directives(&mut self) -> Result<Vec<Directive<'src>>, ParseError> {
+        let mut out = Vec::new();
         while self.peek()?.kind == TokenKind::At {
             self.bump_tok()?; // @
             let name = self.parse_name()?;
             let arguments = if self.peek()?.kind == TokenKind::LParen {
                 self.parse_arguments()?
             } else {
-                BVec::new_in(self.arena)
+                Vec::new()
             };
             out.push(Directive { name, arguments });
         }
         Ok(out)
     }
 
-    fn parse_arguments(&mut self) -> Result<BVec<'bump, Argument<'src, 'bump>>, ParseError> {
+    fn parse_arguments(&mut self) -> Result<Vec<Argument<'src>>, ParseError> {
         self.expect(TokenKind::LParen, ParseErrorKind::UnexpectedToken)?;
-        let mut out = BVec::new_in(self.arena);
+        let mut out = Vec::new();
         loop {
             let t = self.peek()?;
             if t.kind == TokenKind::RParen {
@@ -491,9 +468,9 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         Ok(out)
     }
 
-    fn parse_selection_set(&mut self) -> Result<SelectionSet<'src, 'bump>, ParseError> {
+    fn parse_selection_set(&mut self) -> Result<SelectionSet<'src>, ParseError> {
         let open = self.expect(TokenKind::LBrace, ParseErrorKind::UnexpectedToken)?;
-        let mut selections = BVec::new_in(self.arena);
+        let mut selections = Vec::new();
         loop {
             let t = self.peek()?;
             if t.kind == TokenKind::RBrace {
@@ -516,7 +493,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         }
     }
 
-    fn parse_selection(&mut self) -> Result<Selection<'src, 'bump>, ParseError> {
+    fn parse_selection(&mut self) -> Result<Selection<'src>, ParseError> {
         let t = self.peek()?;
         if t.kind == TokenKind::Spread {
             self.bump_tok()?; // ...
@@ -567,7 +544,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
         let arguments = if self.peek()?.kind == TokenKind::LParen {
             self.parse_arguments()?
         } else {
-            BVec::new_in(self.arena)
+            Vec::new()
         };
         let directives = self.parse_directives()?;
         let selection_set = if self.peek()?.kind == TokenKind::LBrace {
@@ -585,7 +562,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
     }
 
     /// Parse a Value. `is_const` rejects `$variable` (used in default values).
-    fn parse_value(&mut self, is_const: bool) -> Result<Value<'src, 'bump>, ParseError> {
+    fn parse_value(&mut self, is_const: bool) -> Result<Value<'src>, ParseError> {
         let t = self.peek()?;
         match t.kind {
             TokenKind::Dollar => {
@@ -633,7 +610,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
             }
             TokenKind::LBracket => {
                 self.bump_tok()?;
-                let mut items = BVec::new_in(self.arena);
+                let mut items = Vec::new();
                 loop {
                     let nt = self.peek()?;
                     if nt.kind == TokenKind::RBracket {
@@ -649,7 +626,7 @@ impl<'src, 'bump> Parser<'src, 'bump> {
             }
             TokenKind::LBrace => {
                 self.bump_tok()?;
-                let mut fields = BVec::new_in(self.arena);
+                let mut fields = Vec::new();
                 loop {
                     let nt = self.peek()?;
                     if nt.kind == TokenKind::RBrace {

@@ -63,20 +63,14 @@ pub use parse::{
 /// This is the canonical `ops` entry point. Available whenever the `ops`
 /// feature is enabled (which the default feature set turns on).
 ///
-/// As of R3 the AST is bumpalo-arena-allocated; the caller owns the arena
-/// and the returned [`Document`] borrows from it. The arena is freed when
-/// the caller drops it (O(1) AST teardown). See
-/// `docs/investigation-r2-wasm-size.md` for the rationale (single
-/// monomorphization across the seven list types in the AST).
+/// The returned [`Document`] borrows identifiers and lexemes directly from
+/// the input source (`&'src str`). All AST list collections live in
+/// span-indexed flat arrays owned by the `Document`; dropping the document
+/// frees the entire AST in O(1). See `docs/investigation-r5-span-indexed-design.md`
+/// for the storage layout rationale.
 #[cfg(feature = "ops")]
-pub fn parse_executable_document<'src, 'bump>(
-    arena: &'bump bumpalo::Bump,
+pub fn parse_executable_document<'src>(
     src: &'src str,
-) -> Result<Document<'src, 'bump>, ParseError> {
-    parse::parse_executable_document(arena, src)
+) -> Result<Document<'src>, ParseError> {
+    parse::parse_executable_document(src)
 }
-
-// Re-export the arena allocator so callers do not need to take a direct
-// `bumpalo` dependency.
-#[cfg(feature = "ops")]
-pub use bumpalo::Bump;

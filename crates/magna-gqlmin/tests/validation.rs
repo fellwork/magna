@@ -7,13 +7,12 @@
 
 #![cfg(feature = "validate")]
 
-use magna_gqlmin::{parse_executable_document, validate_operations, Bump};
+use magna_gqlmin::{parse_executable_document, validate_operations};
 
 // Inline `parse + validate` so the `Document` borrow stays alive across
-// the `validate_operations` call. The bumpalo arena outlives both.
+// the `validate_operations` call.
 fn rules(src: &str) -> Vec<&'static str> {
-    let bump = Bump::new();
-    let doc = parse_executable_document(&bump, src).unwrap_or_else(|e| {
+    let doc = parse_executable_document(src).unwrap_or_else(|e| {
         panic!("test fixture failed to parse: {:?} in:\n{}", e, src)
     });
     validate_operations(&doc).into_iter().map(|e| e.rule).collect()

@@ -16,13 +16,7 @@ default = ["ops", "std"]
 
 # Always-on operations parser. Splitting it out lets the wasm/no_std build
 # stay minimal and keeps feature lists explicit.
-#
-# `dep:bumpalo` is wired here (rather than on `wasm`) because the AST is
-# bumpalo-arena allocated in every build mode — the public API
-# `Document<'src, 'bump>` requires the dependency unconditionally with `ops`.
-# bumpalo (with default-features off + the `collections` feature) is no_std
-# compatible, so this does not break the wasm build.
-ops = ["dep:bumpalo"]
+ops = []
 
 # Pull in std; required by `pretty`, `validate`, and any host-side glue.
 std = []
@@ -53,17 +47,12 @@ wasm = ["ops", "dep:dlmalloc"]
 wasm-bindgen = ["wasm"]
 
 [dependencies]
-# Runtime deps (R3): two — `bumpalo` (arena AST, gated on `ops`) and
-# `dlmalloc` (wasm allocator, gated on `wasm`). See
-# `docs/investigation-r2-wasm-size.md` for why bumpalo is mandatory.
-#
-# bumpalo: arena allocator for the AST. Single monomorphized Vec collapses
-# the seven distinct `Vec<T>` types into one set of grow/drop/realloc
-# functions. `default-features = false` excludes `boxed`/`serde` features —
-# only the `collections` (bumpalo::collections::Vec) integration is used.
-# This config is no_std-compatible.
-bumpalo = { version = "3", default-features = false, features = ["collections"], optional = true }
-# dlmalloc: wasm allocator (optional, only under feature = "wasm").
+# Runtime deps: `dlmalloc` (wasm allocator, gated on `wasm`) is the only
+# crate dependency in the wasm build. R5 reverted the bumpalo arena (R3)
+# in favor of a span-indexed flat-array AST design that keeps the public
+# API single-lifetime (`Document<'src>`) and avoids bumpalo's panic-path
+# `core::fmt` / Unicode-table bloat. See
+# `docs/investigation-r3-bumpalo-panic-bloat.md`.
 dlmalloc = { version = "0.2", optional = true, default-features = false, features = ["global"] }
 
 # R4 host-side optional deps (none of these touch the wasm size budget —
