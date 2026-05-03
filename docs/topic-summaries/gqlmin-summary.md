@@ -240,6 +240,49 @@ No bumpalo. Implementation is parser-internals rewrite. Estimated gz: 3–5 KB
 along with the AST migration revert. The `dep:bumpalo` entry under the `ops`
 feature must be removed.
 
+## R5 outcome — Option B partial (structural collapse confirmed, budget gap remains)
+
+R5 implemented span-indexed flat arrays (design 2B: single typed Node arena
+in Document). All 7 distinct `Vec<T>` collections collapsed to ONE `Vec<Node>`,
+plus a parser-internal scratch stack of the same type. Result: function count
+150 (R2) → 77 (R5), confirming the Vec-monomorphization root cause. Public
+API stays `Document<'src>` (single lifetime). All 38 corpus + 5 pretty + 12
+validation tests pass. Wasm smoke test unchanged: tag=0 success, tag=1
+kind=34 EmptySelectionSet — ABI durable across R2/R3/R5.
+
+| Round | Approach | gz bytes | Δ vs prev |
+|---|---|---|---|
+| R2 baseline | Vec + dlmalloc + Debug-gated | 15,375 | — |
+| R3 | bumpalo arena (refuted) | 17,490 | +2,115 |
+| R5 | span-indexed Node arena | 14,895 | −2,595 vs R3, −480 vs R2 |
+
+**Why the per-byte gain was modest:** LTO had already collapsed some of the
+Vec monomorphizations on the R2 baseline. The 150→77 function-count signal
+proves the structural change worked; the ~480-byte savings reflects the
+incremental wins after LTO was already doing partial deduplication.
+
+### Math reality after R5
+
+Current: 14,895 bytes gz. Budget: 5,120. Gap: **9,775 bytes**.
+
+Identified next-rung candidates from R5 (`docs/investigation-r5-span-indexed-design.md`
+section "Next-largest bloat"):
+
+| Rung | Mitigation | Estimated savings | Risk |
+|---|---|---|---|
+| 1 | Unicode/slice-panic elimination — replace `.src[s..e]` with `.src.get(s..e).unwrap_or("")` to break `core::str` Debug reachability | 3,000–4,000 bytes gz | Low (mechanical) |
+| 2 | dlmalloc → wee_alloc swap | ~1,400 bytes gz | Low (one-line) |
+| 3 | Custom panic-handler / fmt::Write shim | ~1,000 bytes gz (med-confidence) | Medium |
+| 4 | Option F (build-std nightly, requires user approval) | likely lands ≤5,120 | Toolchain split |
+
+Combined rungs 1+2+3 best-case: **−6,400 → ~8,495 bytes gz**. Still ~3.4 KB
+over budget. Stable-toolchain rungs alone are unlikely to hit 5,120.
+
+**Decision (per Director R5):** continue methodically through rung 1 in R6,
+then re-assess with empirical data before the budget-vs-Option-F surface.
+Counter advanced to **2/5** after R5 (3 attempts remain in the structural-fix
+defect class).
+
 ## Round log
 
 > Defect class: "structural fix — bumpalo arena migration" started after R2 surface. Iteration counter reset to 0/5 per playbook (work nature shifted from "build to spec" to "fix structural mismatch").
@@ -250,14 +293,16 @@ feature must be removed.
 | R2 | 5–6 (wasm shim, SIZE.md, CI gate, smoke) | ⚠️ PARTIAL | wasm builds + smoke passes (tag=0/tag=1+kind=34); 38 R1 tests still pass; gz=15375 vs 5120 budget — surface to user; user chose Option A (bumpalo arena) |
 | R3 | Option A: bumpalo arena migration (structural fix) | ❌ BLOCKED (Iron Law) | gz=17,490 (Δ=+2,115 vs R2). Vec collapse worked (150→90 fns) but bumpalo's panic paths pulled in core::str fmt + Unicode tables (~3 KB) + bumpalo crate (~1 KB), exceeding the savings. ABI/tests intact. |
 | R4 | Step 7 (napi scaffold) + step 9 partial (5 of 10 ops-only validation rules) + step 10 partial (pretty errors, serde feature scaffold) — parallel with R3 | ✅ DONE | 5 pretty + 12 validation + 1 serde-smoke tests; all feature combos compile; threaded `Document<'src, 'bump>` lifetime via 1 fix-up commit |
+| R5 | Option B: span-indexed Node arena (revert bumpalo + rewrite) | ⚠️ PARTIAL | gz=14,895 (Δ=−480 vs R2; −2,595 vs R3). Function count 150→77 confirms structural collapse. ABI/tests intact. Below R2 baseline but ~9.7 KB over budget. |
 
 ## Open questions
 
-- R5 measurement-pending: actual gz post-span-indexed implementation; if
-  still > 5,120 bytes, R6+ tuning rounds attack the next-largest bloat
-  source (likely panic strings, alloc bookkeeping, or LLVM intrinsics).
-- Open: do we need to revert R3's bumpalo commits before R5, or just remove
-  the dep and rewrite forward? (R5 brief specifies the cleaner path.)
+- R6 measurement-pending: Unicode/slice-panic elimination yield (estimated 3–4 KB).
+- After R6: surface to user with empirical data if combined rungs 1+2+3 projection
+  holds (~8.5 KB ceiling on stable). User then chooses between methodical
+  continuation, Option C (revise budget), or Option F (build-std nightly).
+- Hard-stop awareness: structural-fix defect class will hit 5/5 if R6+R7+R8 don't
+  land. Director recommends preemptive surface after R6 rather than riding to 5/5.
 
 ## Latest director-note
 
