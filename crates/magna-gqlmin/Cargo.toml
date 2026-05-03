@@ -44,6 +44,7 @@ wasm-bindgen = ["wasm"]
 
 [dependencies]
 # Goal: zero runtime deps. Re-evaluate per round.
+# dlmalloc: wasm allocator (optional, only under feature = "wasm").
 dlmalloc = { version = "0.2", optional = true, default-features = false, features = ["global"] }
 
 [dev-dependencies]

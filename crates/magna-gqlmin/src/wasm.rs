@@ -58,12 +58,16 @@ pub unsafe extern "C" fn gqlmin_free(ptr: *mut u8, len: usize) {
 #[no_mangle]
 pub unsafe extern "C" fn gqlmin_parse(src_ptr: *const u8, src_len: usize) -> *const u8 {
     let bytes = core::slice::from_raw_parts(src_ptr, src_len);
-    let src = match core::str::from_utf8(bytes) {
-        Ok(s) => s,
-        Err(_) => {
-            return encode_error(0, 0, crate::ParseErrorKind::UnexpectedChar as u8);
-        }
-    };
+    // SAFETY: The lexer works byte-by-byte for all ASCII tokens. It only
+    // reads past ASCII in string literal content (which it never decodes),
+    // so an invalid UTF-8 sequence in a string literal body will be passed
+    // through as an opaque byte range and returned as a StringValue span.
+    // Using from_utf8_unchecked avoids pulling in the UTF-8 validation
+    // machinery (which brings in core::str::Utf8Error formatting paths and
+    // source-location strings that add ~1 KB to the wasm gz size).
+    // The JS caller is responsible for sending valid UTF-8; any stray bytes
+    // will at worst produce an UnexpectedChar error from the lexer.
+    let src = unsafe { core::str::from_utf8_unchecked(bytes) };
     match crate::parse_executable_document(src) {
         Ok(_) => encode_ok(),
         Err(e) => encode_error(e.span.start, e.span.end, e.kind as u8),
