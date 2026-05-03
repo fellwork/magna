@@ -71,3 +71,62 @@ See `docs/investigation-r2-wasm-size.md` for full analysis and proposed fix path
    Lists stored as index ranges into a flat backing array. Estimated gz: 3000–5000 bytes.
 
 3. **Fix C (build-std dead stripping):** Requires nightly toolchain — scope shift.
+
+## R3 (Option A — bumpalo arena) — 2026-05-03
+
+- rustc: `rustc 1.89.0 (29483883e 2025-08-04)`
+- wasm-opt: `wasm-opt version 108`
+- Build command:
+  ```
+  cargo build -p magna-gqlmin --target wasm32-unknown-unknown \
+    --no-default-features --features "ops,wasm" --profile release-wasm
+  wasm-opt -Oz --strip-debug --vacuum --enable-bulk-memory --enable-sign-ext \
+    target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+    -o /tmp/gqlmin.opt.wasm
+  ```
+
+- Pipeline:
+  | Stage | Bytes |
+  |---|---|
+  | Raw `.wasm` | 43342 |
+  | Post `wasm-opt -Oz --strip-debug --vacuum` | 37152 |
+  | Post `gzip -9` | **17490** |
+
+- Budget: 5120 bytes gz
+- R2 baseline: 15375 bytes gz
+- R3 result: **17490 bytes gz** — Δ = +2115 bytes vs R2 baseline (WORSE).
+- Status: ❌ over 7,000-byte Iron Law ceiling. Iron Law fires.
+
+### Why R3 grew the binary
+
+The bumpalo migration successfully collapsed the 7-Vec monomorphization
+problem (function count fell from 150 in R2 to 90 in R3, the 7 distinct
+`RawVec::*` impls collapsed into one). However, two new contributions
+overwhelmed that win:
+
+1. **Bumpalo's panic paths pull in `core::str` Debug formatting and the
+   Unicode `printable.rs` tables.** Inspection of the data section shows
+   `library/core/src/unicode/printable.rs` and the full
+   `byte index ... is not a char boundary; it is inside ... (bytes ...) of`
+   panic message infrastructure are present, plus the `0x00..99` ASCII
+   pair table and the Unicode property tables (~4 KB binary data).
+   These were NOT in the R2 binary. The R2 binary used only `core::alloc`
+   panics which have static, format-free messages.
+
+2. **`bumpalo` crate code itself** (alloc.rs, raw_vec.rs, lib.rs) adds
+   ~1 KB of grow/realloc/Layout-validation logic on top of `dlmalloc`.
+   This is a fixed per-binary cost.
+
+Function-count won (150 → 90), data-section lost (~5 KB of new strings
++ Unicode tables). Net is a binary that's 2 KB gz larger than R2.
+
+### Verdict
+
+R3 verdict: **OVER (Iron Law fires)** — see `docs/investigation-r3-bumpalo-panic-bloat.md`.
+The Vec-monomorphization analysis was correct (and the 60-function
+reduction proves it), but the assumption that bumpalo would be a
+near-zero-overhead drop-in was wrong. Bumpalo's panic-formatting paths
+are heavier than the Vec monomorphization they replaced.
+
+Surfaced to user as BLOCKED. Candidate next moves listed in the
+investigation doc.
