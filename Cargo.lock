@@ -1836,6 +1836,7 @@ dependencies = [
 name = "magna-gqlmin"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "dlmalloc",
  "napi",
  "napi-derive",

@@ -18,14 +18,21 @@
 //! Gated behind the `validate` feature which implies `std`. The validator
 //! is host-side tooling — it is intentionally not built into the wasm
 //! runtime.
+//!
+//! ## R3-aftermath note
+//!
+//! The AST carries two lifetimes (`'src` over the input text, `'bump` over
+//! the bumpalo arena). The validator just walks borrowed shared references,
+//! so it doesn't care which arena owns the children — it threads both
+//! lifetimes through opaquely.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::vec::Vec;
 
 use crate::lex::Span;
 use crate::parse::{
-    Argument, Definition, Directive, Document, FragmentDefinition, FragmentSpread,
-    InlineFragment, ObjectField, OperationDefinition, Selection, SelectionSet, Value,
+    Argument, Directive, Document, FragmentDefinition, FragmentSpread, InlineFragment,
+    ObjectField, OperationDefinition, Selection, SelectionSet, Value,
 };
 
 /// A validation finding, returned by [`validate_operations`].
@@ -51,24 +58,27 @@ pub const RULE_UNIQUE_OPERATION_NAMES: &str = "UniqueOperationNames";
 /// The returned `Vec` is empty iff the document is valid under these rules.
 /// Errors are emitted in a stable, document-order traversal so callers can
 /// rely on the ordering for UI rendering.
-pub fn validate_operations(doc: &Document<'_>) -> Vec<ValidationError> {
+pub fn validate_operations<'src, 'bump>(
+    doc: &Document<'src, 'bump>,
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // Index fragment definitions by name for `KnownFragmentNames` and to
     // support `NoUnusedFragments`. We also collect operations for the
     // variable-rules pass and the unique-names check.
-    let mut fragments_by_name: BTreeMap<&str, &FragmentDefinition<'_>> = BTreeMap::new();
+    let mut fragments_by_name: BTreeMap<&str, &FragmentDefinition<'src, 'bump>> =
+        BTreeMap::new();
     // Track usage counts so we can emit a `NoUnusedFragments` error per
     // unused fragment in document order.
     let mut fragment_use_counts: BTreeMap<&str, usize> = BTreeMap::new();
     // Order-preserving list of fragment definitions for the unused pass.
-    let mut fragment_defs_in_order: Vec<&FragmentDefinition<'_>> = Vec::new();
-    let mut operations: Vec<&OperationDefinition<'_>> = Vec::new();
+    let mut fragment_defs_in_order: Vec<&FragmentDefinition<'src, 'bump>> = Vec::new();
+    let mut operations: Vec<&OperationDefinition<'src, 'bump>> = Vec::new();
 
     for def in &doc.definitions {
         match def {
-            Definition::Operation(op) => operations.push(op),
-            Definition::Fragment(frag) => {
+            crate::parse::Definition::Operation(op) => operations.push(op),
+            crate::parse::Definition::Fragment(frag) => {
                 fragments_by_name.insert(frag.name.value, frag);
                 fragment_use_counts.insert(frag.name.value, 0);
                 fragment_defs_in_order.push(frag);
@@ -97,13 +107,28 @@ pub fn validate_operations(doc: &Document<'_>) -> Vec<ValidationError> {
     // spread. Spreads to undefined fragments => KnownFragmentNames. Defined
     // fragments with zero spreads => NoUnusedFragments.
     for op in &operations {
-        walk_fragment_spreads(&op.selection_set, &fragments_by_name, &mut fragment_use_counts, &mut errors);
+        walk_fragment_spreads(
+            &op.selection_set,
+            &fragments_by_name,
+            &mut fragment_use_counts,
+            &mut errors,
+        );
     }
     for frag in &fragment_defs_in_order {
-        walk_fragment_spreads(&frag.selection_set, &fragments_by_name, &mut fragment_use_counts, &mut errors);
+        walk_fragment_spreads(
+            &frag.selection_set,
+            &fragments_by_name,
+            &mut fragment_use_counts,
+            &mut errors,
+        );
     }
     for frag in &fragment_defs_in_order {
-        if fragment_use_counts.get(frag.name.value).copied().unwrap_or(0) == 0 {
+        if fragment_use_counts
+            .get(frag.name.value)
+            .copied()
+            .unwrap_or(0)
+            == 0
+        {
             errors.push(ValidationError {
                 rule: RULE_NO_UNUSED_FRAGMENTS,
                 span: frag.span,
@@ -117,8 +142,8 @@ pub fn validate_operations(doc: &Document<'_>) -> Vec<ValidationError> {
 
 // --- UniqueOperationNames -----------------------------------------------
 
-fn check_unique_operation_names<'a>(
-    operations: &[&'a OperationDefinition<'a>],
+fn check_unique_operation_names<'src, 'bump>(
+    operations: &[&OperationDefinition<'src, 'bump>],
     errors: &mut Vec<ValidationError>,
 ) {
     // Anonymous-only-if-sole rule: if any op is anonymous AND there's more
@@ -153,15 +178,15 @@ fn check_unique_operation_names<'a>(
 
 // --- NoUndefinedVariables / NoUnusedVariables ---------------------------
 
-fn check_variables_for_operation<'a>(
-    op: &'a OperationDefinition<'a>,
-    fragments_by_name: &BTreeMap<&'a str, &'a FragmentDefinition<'a>>,
+fn check_variables_for_operation<'src, 'bump>(
+    op: &OperationDefinition<'src, 'bump>,
+    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src, 'bump>>,
     errors: &mut Vec<ValidationError>,
 ) {
     // Declared variables (preserve declaration order via Vec; lookup via
     // BTreeMap from name -> span for the error report).
-    let mut declared_order: Vec<&str> = Vec::new();
-    let mut declared_spans: BTreeMap<&str, Span> = BTreeMap::new();
+    let mut declared_order: Vec<&'src str> = Vec::new();
+    let mut declared_spans: BTreeMap<&'src str, Span> = BTreeMap::new();
     for vd in &op.variable_definitions {
         if declared_spans.insert(vd.name.value, vd.name.span).is_none() {
             declared_order.push(vd.name.value);
@@ -170,10 +195,10 @@ fn check_variables_for_operation<'a>(
 
     // Walk the operation body + transitively-spread fragment bodies,
     // collecting every variable reference and the span where it appeared.
-    let mut used: BTreeMap<&str, Span> = BTreeMap::new();
-    let mut visited_frags: BTreeSet<&str> = BTreeSet::new();
-    collect_variable_uses(
-        &op.directives,
+    let mut used: BTreeMap<&'src str, Span> = BTreeMap::new();
+    let mut visited_frags: BTreeSet<&'src str> = BTreeSet::new();
+    collect_variable_uses_in_directives(&op.directives, &mut used);
+    collect_variable_uses_in_selection_set(
         &op.selection_set,
         fragments_by_name,
         &mut visited_frags,
@@ -214,16 +239,12 @@ fn check_variables_for_operation<'a>(
     }
 }
 
-fn collect_variable_uses<'a>(
-    directives: &[Directive<'a>],
-    selection_set: &SelectionSet<'a>,
-    fragments_by_name: &BTreeMap<&'a str, &'a FragmentDefinition<'a>>,
-    visited_frags: &mut BTreeSet<&'a str>,
-    out: &mut BTreeMap<&'a str, Span>,
+fn collect_variable_uses_in_selection_set<'src, 'bump>(
+    selection_set: &SelectionSet<'src, 'bump>,
+    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src, 'bump>>,
+    visited_frags: &mut BTreeSet<&'src str>,
+    out: &mut BTreeMap<&'src str, Span>,
 ) {
-    for d in directives {
-        collect_variable_uses_in_directive(d, out);
-    }
     for sel in &selection_set.selections {
         match sel {
             Selection::Field(f) => {
@@ -234,7 +255,12 @@ fn collect_variable_uses<'a>(
                     collect_variable_uses_in_directive(d, out);
                 }
                 if let Some(inner) = &f.selection_set {
-                    collect_variable_uses(&[], inner, fragments_by_name, visited_frags, out);
+                    collect_variable_uses_in_selection_set(
+                        inner,
+                        fragments_by_name,
+                        visited_frags,
+                        out,
+                    );
                 }
             }
             Selection::FragmentSpread(FragmentSpread { name, directives }) => {
@@ -246,8 +272,8 @@ fn collect_variable_uses<'a>(
                 // separate validation rule we don't ship in R4).
                 if visited_frags.insert(name.value) {
                     if let Some(frag) = fragments_by_name.get(name.value) {
-                        collect_variable_uses(
-                            &frag.directives,
+                        collect_variable_uses_in_directives(&frag.directives, out);
+                        collect_variable_uses_in_selection_set(
                             &frag.selection_set,
                             fragments_by_name,
                             visited_frags,
@@ -261,29 +287,47 @@ fn collect_variable_uses<'a>(
                 selection_set,
                 ..
             }) => {
-                collect_variable_uses(directives, selection_set, fragments_by_name, visited_frags, out);
+                collect_variable_uses_in_directives(directives, out);
+                collect_variable_uses_in_selection_set(
+                    selection_set,
+                    fragments_by_name,
+                    visited_frags,
+                    out,
+                );
             }
         }
     }
 }
 
-fn collect_variable_uses_in_directive<'a>(
-    d: &Directive<'a>,
-    out: &mut BTreeMap<&'a str, Span>,
+fn collect_variable_uses_in_directives<'src, 'bump>(
+    directives: &[Directive<'src, 'bump>],
+    out: &mut BTreeMap<&'src str, Span>,
+) {
+    for d in directives {
+        collect_variable_uses_in_directive(d, out);
+    }
+}
+
+fn collect_variable_uses_in_directive<'src, 'bump>(
+    d: &Directive<'src, 'bump>,
+    out: &mut BTreeMap<&'src str, Span>,
 ) {
     for a in &d.arguments {
         collect_variable_uses_in_argument(a, out);
     }
 }
 
-fn collect_variable_uses_in_argument<'a>(
-    a: &Argument<'a>,
-    out: &mut BTreeMap<&'a str, Span>,
+fn collect_variable_uses_in_argument<'src, 'bump>(
+    a: &Argument<'src, 'bump>,
+    out: &mut BTreeMap<&'src str, Span>,
 ) {
     collect_variable_uses_in_value(&a.value, out);
 }
 
-fn collect_variable_uses_in_value<'a>(v: &Value<'a>, out: &mut BTreeMap<&'a str, Span>) {
+fn collect_variable_uses_in_value<'src, 'bump>(
+    v: &Value<'src, 'bump>,
+    out: &mut BTreeMap<&'src str, Span>,
+) {
     match v {
         Value::Variable(name) => {
             // Record only the FIRST occurrence (BTreeMap preserves it via
@@ -307,10 +351,10 @@ fn collect_variable_uses_in_value<'a>(v: &Value<'a>, out: &mut BTreeMap<&'a str,
 
 // --- KnownFragmentNames / NoUnusedFragments -----------------------------
 
-fn walk_fragment_spreads<'a>(
-    selection_set: &SelectionSet<'a>,
-    fragments_by_name: &BTreeMap<&'a str, &'a FragmentDefinition<'a>>,
-    use_counts: &mut BTreeMap<&'a str, usize>,
+fn walk_fragment_spreads<'src, 'bump>(
+    selection_set: &SelectionSet<'src, 'bump>,
+    fragments_by_name: &BTreeMap<&'src str, &FragmentDefinition<'src, 'bump>>,
+    use_counts: &mut BTreeMap<&'src str, usize>,
     errors: &mut Vec<ValidationError>,
 ) {
     for sel in &selection_set.selections {
@@ -338,4 +382,3 @@ fn walk_fragment_spreads<'a>(
         }
     }
 }
-
