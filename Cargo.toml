@@ -85,3 +85,14 @@ reqwest        = { version = "0.12", features = ["json", "rustls-tls"], default-
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[profile.release-wasm]
+inherits        = "release"
+opt-level       = "z"
+lto             = "fat"
+codegen-units   = 1
+panic           = "abort"
+strip           = "symbols"
+debug           = false
+overflow-checks = false
+incremental     = false

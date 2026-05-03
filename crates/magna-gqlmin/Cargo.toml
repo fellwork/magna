@@ -37,12 +37,13 @@ serde = []
 napi = ["serde", "std"]
 
 # Pure no_std + extern "C" wasm exports. NO wasm-bindgen.
-wasm = ["ops"]
+wasm = ["ops", "dep:dlmalloc"]
 
 # Opt-in fatter wasm escape hatch via wasm-bindgen.
 wasm-bindgen = ["wasm"]
 
 [dependencies]
 # Goal: zero runtime deps. Re-evaluate per round.
+dlmalloc = { version = "0.2", optional = true, default-features = false, features = ["global"] }
 
 [dev-dependencies]

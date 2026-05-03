@@ -27,6 +27,12 @@ impl ParseError {
     }
 }
 
+// Gate Display behind `std` to avoid pulling in the `core::fmt` integer-
+// formatting machinery and its associated unicode printable-char tables into
+// the wasm build. The wasm binary only exposes a binary ABI (`gqlmin_parse`)
+// and never formats errors as text; the Display impl is only useful to
+// host-side Rust callers who already have `std`.
+#[cfg(feature = "std")]
 impl core::fmt::Display for ParseError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Avoid `format!`; write the parts directly.

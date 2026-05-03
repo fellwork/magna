@@ -19,7 +19,9 @@
 //! arrive in later rounds.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-#![forbid(unsafe_code)]
+// The wasm shim (feature = "wasm") uses unsafe for allocator glue and extern "C"
+// exports. Outside that module, unsafe is forbidden.
+#![cfg_attr(not(feature = "wasm"), forbid(unsafe_code))]
 #![deny(rust_2018_idioms)]
 
 extern crate alloc;
@@ -27,6 +29,9 @@ extern crate alloc;
 pub mod error;
 pub mod lex;
 pub mod parse;
+
+#[cfg(feature = "wasm")]
+mod wasm;
 
 pub use error::{ParseError, ParseErrorKind};
 pub use lex::{Lexer, Span, Token, TokenKind};
