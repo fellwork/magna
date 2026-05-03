@@ -16,7 +16,13 @@ default = ["ops", "std"]
 
 # Always-on operations parser. Splitting it out lets the wasm/no_std build
 # stay minimal and keeps feature lists explicit.
-ops = []
+#
+# `dep:bumpalo` is wired here (rather than on `wasm`) because the AST is
+# bumpalo-arena allocated in every build mode — the public API
+# `Document<'src, 'bump>` requires the dependency unconditionally with `ops`.
+# bumpalo (with default-features off + the `collections` feature) is no_std
+# compatible, so this does not break the wasm build.
+ops = ["dep:bumpalo"]
 
 # Pull in std; required by `pretty`, `validate`, and any host-side glue.
 std = []
@@ -24,8 +30,9 @@ std = []
 # Type-system definitions (schema-language). Feature-gated; not in this round.
 sdl = []
 
-# Validation rules. Requires `sdl` and `std`.
-validate = ["sdl", "std"]
+# Validation rules. R4 ships ops-only rules (no SDL); schema-aware rules
+# will re-add the `sdl` dep when implemented in R6.
+validate = ["std"]
 
 # Caret/line error rendering. Requires `std`.
 pretty = ["std"]
@@ -46,7 +53,16 @@ wasm = ["ops", "dep:dlmalloc"]
 wasm-bindgen = ["wasm"]
 
 [dependencies]
-# Goal: zero runtime deps. Re-evaluate per round.
+# Runtime deps (R3): two — `bumpalo` (arena AST, gated on `ops`) and
+# `dlmalloc` (wasm allocator, gated on `wasm`). See
+# `docs/investigation-r2-wasm-size.md` for why bumpalo is mandatory.
+#
+# bumpalo: arena allocator for the AST. Single monomorphized Vec collapses
+# the seven distinct `Vec<T>` types into one set of grow/drop/realloc
+# functions. `default-features = false` excludes `boxed`/`serde` features —
+# only the `collections` (bumpalo::collections::Vec) integration is used.
+# This config is no_std-compatible.
+bumpalo = { version = "3", default-features = false, features = ["collections"], optional = true }
 # dlmalloc: wasm allocator (optional, only under feature = "wasm").
 dlmalloc = { version = "0.2", optional = true, default-features = false, features = ["global"] }
 

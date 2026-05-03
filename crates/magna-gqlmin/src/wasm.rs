@@ -68,7 +68,11 @@ pub unsafe extern "C" fn gqlmin_parse(src_ptr: *const u8, src_len: usize) -> *co
     // The JS caller is responsible for sending valid UTF-8; any stray bytes
     // will at worst produce an UnexpectedChar error from the lexer.
     let src = unsafe { core::str::from_utf8_unchecked(bytes) };
-    match crate::parse_executable_document(src) {
+    // R3: the AST is bumpalo-arena-allocated. Allocate a fresh `Bump` per
+    // call, parse into it, encode the binary result, then drop the arena
+    // (freeing the entire AST in O(1)). The wasm-visible ABI is unchanged.
+    let bump = bumpalo::Bump::new();
+    match crate::parse_executable_document(&bump, src) {
         Ok(_) => encode_ok(),
         Err(e) => encode_error(e.span.start, e.span.end, e.kind as u8),
     }
