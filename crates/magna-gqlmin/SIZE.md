@@ -261,3 +261,105 @@ Rust, but the absolute gz figure is still above both the budget and
 the Iron Law ceiling. Surface to user with the next-largest bloat
 identified; user picks the next rung (allocator swap, parser-body
 panic-elimination audit, or Option F nightly build-std).
+
+## R6 (rung 1 — Unicode/slice-panic elimination) — 2026-05-03
+
+- rustc: `rustc 1.89.0 (29483883e 2025-08-04)`
+- wasm-opt: `wasm-opt version 108`
+- Build command:
+  ```
+  cargo build -p magna-gqlmin --target wasm32-unknown-unknown \
+    --no-default-features --features "ops,wasm" --profile release-wasm
+  wasm-opt -Oz --strip-debug --vacuum --enable-bulk-memory --enable-sign-ext \
+    target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+    -o /tmp/gqlmin.opt.wasm
+  ```
+
+- Pipeline:
+  | Stage | Bytes |
+  |---|---|
+  | Raw `.wasm` | 27963 |
+  | Post `wasm-opt -Oz --strip-debug --vacuum` | 22819 |
+  | Post `gzip -9` | **10006** |
+
+- Budget: 5120 bytes gz
+- R5: 14895 bytes gz (re-measured during R6 baseline as 14898 — within
+  rounding noise for `gzip -9`)
+- R6 result: **10006 bytes gz** — Δ = **−4889** vs R5 (~4.8 KB savings).
+- Status: ⚠️ PARTIAL — gz=10006 is well below R5 (14895) and below the
+  R3 (17490) and R2 (15375) baselines. Inside the band (7,001 ≤ gz ≤
+  11,000) per R6 brief: meaningful improvement, still over the 7,000-byte
+  Iron Law ceiling and the 5,120-byte budget. R6 lands the upper end of
+  R5's 3–4 KB estimate (actual: 4.9 KB).
+
+### What R6 changed
+
+Replaced every panic-on-bounds slice/index operation in `lex.rs` and
+`parse/mod.rs` with `Option`-returning equivalents (`.get(i)`,
+`.get(s..e)`):
+
+| File | Replacements |
+|---|---|
+| `src/lex.rs` | 17 byte-index reads (`self.bytes[i]` → `self.bytes.get(i).copied().unwrap_or(0)` or `match … { Some(&b) => …, None => … }`) + 1 `&str` slice (`&self.src[s..e]` → `self.src.get(s..e).unwrap_or("")`) |
+| `src/parse/mod.rs` | 1 `&str` slice (parser `slice()` helper) + 1 `&Node` index (`NodeSlice::Index` → `match self.nodes.get(i) { Some(n) => …, None => panic_invariant() }`) |
+
+No new `unsafe` blocks. No API changes. No new dependencies. The fallback
+sentinels (`0` byte, `""` string) are defensively unreachable: spans come
+from the lexer and are valid by construction; bytes-out-of-bounds were
+already guarded by length checks immediately above (so the sentinel just
+removes the redundant panic edge LLVM couldn't prove dead).
+
+### Bloat sources eliminated (verified via `wasm-dis`)
+
+Confirmed absent in R6 binary, present in R5 binary:
+
+- `library/core/src/unicode/printable.rs` — entire ~3-4 KB Unicode
+  property table.
+- `library/core/src/str/mod.rs` filename literal.
+- `byte index ... is not a char boundary; it is inside ... (bytes ...) of`
+  panic message.
+- `crates/magna-gqlmin/src/lex.rs` filename literal.
+- `range end index ... out of range for slice of length ...` (slice form).
+- `index out of bounds: the len is ... but the index is ...`.
+- `begin <= end ( <= ) when slicing`.
+
+### Bloat sources remaining (next-rung targets)
+
+Still present in `wasm-dis /tmp/gqlmin.r6.opt.wasm`:
+
+- `crates/magna-gqlmin/src/parse/mod.rs` filename literal — from
+  `panic_invariant()` site (no format string but `track_caller` still
+  emits the filename).
+- `library/alloc/src/raw_vec/mod.rs`, `vec/mod.rs`, `alloc.rs`
+  filename literals — from `Vec::push`/`extend`/grow capacity-overflow
+  panics in the parser scratch & node arena.
+- `dlmalloc-0.2.13/src/dlmalloc.rs` + `assertion failed: psize >= size
+  + min_overhead` / `psize <= size + max_overhead` — dlmalloc internal
+  debug asserts.
+- `slice index starts at  but ends at ` — one remaining `&str`
+  slice-bounds panic message; site not yet identified.
+- `capacity overflow`, `memory allocation of  bytes failed` — alloc
+  panics.
+- `0x00..99` two-digit ASCII pair table — used by integer Display
+  somewhere (could be from `Layout` formatting in alloc panic paths).
+
+### Function count
+
+R5: 77 → R6: pending re-check (function-count signal less interesting
+this round; the win is data-section, not `.text`).
+
+### Iron-Law check
+
+R6 saved 4,889 bytes gz vs R5 (above the 1,500-byte threshold from the
+R6 brief's Iron-Law trigger). The bloat hypothesis (R5's "Unicode tables
+reachable from `&str` slice panic") is empirically confirmed: removing
+those slice operations eliminated the Unicode `printable.rs` tables in
+the data section. Iron Law does NOT fire on R6.
+
+R6 verdict: **PARTIAL — partial-over-ceiling band.** Improvement is
+durable; ABI unchanged (smoke tag=0 / tag=1+kind=34 unchanged). Gap to
+budget remains 4,886 bytes; gap to Iron Law ceiling remains 3,006 bytes.
+Director R6 to decide whether to continue methodically with rung 2
+(wee_alloc, est. −1.4 KB) and rung 3 (panic-handler/fmt::Write shim,
+est. −1 KB), or to surface the budget-vs-Option-F decision now with
+the empirical data point R6 produced.
