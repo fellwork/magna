@@ -37,7 +37,7 @@ pretty = ["std"]
 serde = ["dep:serde"]
 
 # napi-rs binding. Pulls in serde transitively.
-napi = ["serde", "std"]
+napi = ["std", "ops", "serde", "dep:napi", "dep:napi-derive", "dep:serde_json"]
 
 # Pure no_std + extern "C" wasm exports. NO wasm-bindgen.
 wasm = ["ops", "dep:dlmalloc"]
@@ -56,5 +56,10 @@ dlmalloc = { version = "0.2", optional = true, default-features = false, feature
 # serde: AST derives are DEFERRED to post-R3 (R3 owns AST shape). For now
 # the feature flag wires the dep so the scaffold compiles.
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+# napi: Node/Bun binding. `napi9` matches modern Node ABI.
+napi = { version = "2", default-features = false, features = ["napi9"], optional = true }
+napi-derive = { version = "2", optional = true }
+# serde_json: used by the napi binding to build a stable JSON envelope.
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]

@@ -33,6 +33,9 @@ pub mod parse;
 #[cfg(feature = "pretty")]
 mod pretty;
 
+#[cfg(feature = "napi")]
+mod napi;
+
 #[cfg(feature = "wasm")]
 mod wasm;
 
