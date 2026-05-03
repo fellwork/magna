@@ -11,7 +11,8 @@ use crate::error::{ParseError, ParseErrorKind};
 
 /// Byte-offset span into the source. `u32` is enough for any sane source
 /// (4 GiB) and keeps `Token` 16 bytes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct Span {
     pub start: u32,
     pub end: u32,
@@ -37,13 +38,15 @@ impl Span {
 
 /// A lexed token: kind + byte-span into the source. Lexeme text is recovered
 /// via `&source[span]` if the caller needs it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TokenKind {
     // Punctuators (spec 2.1.8).
@@ -72,7 +75,8 @@ pub enum TokenKind {
 
 /// Streaming lexer. `next_token` advances; the lexer never lets the cursor
 /// pass EOF — repeated calls after EOF keep returning `TokenKind::Eof`.
-#[derive(Debug, Clone)]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone)]
 pub struct Lexer<'src> {
     src: &'src str,
     bytes: &'src [u8],

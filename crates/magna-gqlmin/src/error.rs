@@ -9,7 +9,8 @@ use crate::lex::Span;
 
 /// A parse-time error. Carries a span (so callers can render carets without
 /// re-lexing) and a static kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ParseError {
     pub span: Span,
@@ -50,9 +51,16 @@ impl core::fmt::Display for ParseError {
 #[cfg(feature = "std")]
 impl std::error::Error for ParseError {}
 
+// Wire-format contract for the JS-side decoder (@magna/gqlmin-wasm):
+// Lexer errors occupy discriminants 1..=5.
+// Parse errors occupy discriminants 32..=43.
+// The gap is intentional — JS decoders branch on `kind < 32`.
+// When adding a new kind: append within the correct range; do not
+// fill the gap between 5 and 32.
 /// Discriminants are stable within a 0.x minor; new variants may be added
 /// (`#[non_exhaustive]`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[derive(Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum ParseErrorKind {
