@@ -37,9 +37,32 @@ run
 # `ops + wasm` — pure no_std wasm build with dlmalloc allocator and extern "C"
 # export shim. The wasm feature provides the global allocator and panic handler.
 # Requires wasm32-unknown-unknown target.
-echo
-echo "==> cargo check -p $CRATE --target wasm32-unknown-unknown --no-default-features --features ops,wasm"
-cargo check -p "$CRATE" --target wasm32-unknown-unknown --no-default-features --features "ops,wasm"
+#
+# As of R7 (2026-05) the production wasm build path goes through nightly
+# `cargo +nightly build` with `-Z build-std=core,alloc` and
+# `-Cpanic=immediate-abort` to hit the size budget. For `cargo check`
+# correctness purposes, the stable wasm target check still works (the
+# size-gate happens elsewhere — CI workflow `.github/workflows/gqlmin-size.yml`).
+# We attempt nightly first if available, with a clear fallback message.
+if rustup toolchain list 2>/dev/null | grep -q '^nightly' \
+    && rustup +nightly component list --installed 2>/dev/null | grep -q '^rust-src$'; then
+    echo
+    echo "==> RUSTFLAGS=\"-Zunstable-options -Cpanic=immediate-abort\" \\"
+    echo "    cargo +nightly check -p $CRATE --target wasm32-unknown-unknown \\"
+    echo "    --no-default-features --features ops,wasm -Z build-std=core,alloc"
+    RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+        cargo +nightly check -p "$CRATE" \
+        --target wasm32-unknown-unknown \
+        --no-default-features --features "ops,wasm" \
+        -Z build-std=core,alloc
+else
+    echo
+    echo "==> [skipped] nightly + rust-src not installed; production wasm size-gate"
+    echo "    requires: rustup toolchain install nightly --component rust-src"
+    echo "    Falling back to stable check for ops,wasm combo (compile-only):"
+    echo "==> cargo check -p $CRATE --target wasm32-unknown-unknown --no-default-features --features ops,wasm"
+    cargo check -p "$CRATE" --target wasm32-unknown-unknown --no-default-features --features "ops,wasm"
+fi
 
 # `ops + sdl` — sdl is feature-gated and gates no code in R1/R2, so this just
 # proves the flag composes.
