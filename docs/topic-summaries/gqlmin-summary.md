@@ -190,6 +190,10 @@ or a minimal serializer; do not add `insta` as a dependency.
   (decided post-R6). Goal: land ≤5,120 bytes gz via `-Z build-std=core,alloc`
   + `-Z build-std-features=panic_immediate_abort`. Workspace `rust-toolchain.toml`
   remains stable; nightly is invoked only for the wasm size-gate target.
+- R9 path: 9a-inline (parser helper merging, no API change)
+  (decided post-R8). Block-string parsing preserved. Estimated gz
+  5,750–6,050. State-table rewrite explicitly avoided due to risk
+  vs counter-budget tradeoff.
 
 ## Structural size constraint (R2 finding)
 
@@ -444,16 +448,69 @@ with R6/R7/R8 three measurements in hand.
 | R5 | Option B: span-indexed Node arena (revert bumpalo + rewrite) | ⚠️ PARTIAL | gz=14,895 (Δ=−480 vs R2; −2,595 vs R3). Function count 150→77 confirms structural collapse. ABI/tests intact. Below R2 baseline but ~9.7 KB over budget. |
 | R6 | Rung 1: Unicode/slice-panic elimination | ⚠️ PARTIAL | gz=10,006 (Δ=−4,889 vs R5). Eliminated Unicode `printable.rs` tables, char-boundary panic strings, slice-bounds messages (verified by wasm-dis). 38+5+12 tests pass; ABI durable. Beat the 3–4 KB estimate by ~1 KB. |
 | R7 | Path β: nightly build-std `core,alloc` + `-Cpanic=immediate-abort` (RUSTFLAGS) | ⚠️ PARTIAL | gz=8,605 (Δ=−1,401 vs R6). All panic strings + Unicode tables + ASCII pair table physically eliminated from data section (verified by wasm-dis). Hypothesis confirmed. Director ruled PARTIAL not BLOCKED — the 8,500 Iron-Law cutoff was a projection-quality check whose conclusion is contradicted by direct evidence. |
+| R8 | Custom bump allocator (replaces dlmalloc) | ⚠️ PARTIAL | gz=6,254 (Δ=−2,351 vs R7). Wasm distribution now has zero runtime crate deps. R2→R8 = 59% reduction. Top 4 functions = 85% of .text (parser body). 1,134 over budget. |
+
+## R8 outcome + 9a-inline decision (parser helper merging)
+
+R8 replaced dlmalloc with a custom 256 KiB inline bump allocator under
+`feature = "wasm"`. Lifecycle: fill-then-rollover (no in-call reset to
+avoid clobbering source bytes that `gqlmin_alloc` writes at offset 0
+before `gqlmin_parse`). The wasm distribution `[dependencies]` block
+is now zero runtime crate deps.
+
+| Round | Approach | gz bytes | Δ vs prev | Cumulative vs R2 |
+|---|---|---|---|---|
+| R2 baseline | Vec + dlmalloc + Debug-gated | 15,375 | — | 0% |
+| R5 | span-indexed Node arena | 14,895 | −480 | −3% |
+| R6 | + Unicode/slice-panic eliminated | 10,006 | −4,889 | −35% |
+| R7 | + nightly build-std + immediate-abort | 8,605 | −1,401 | −44% |
+| R8 | + custom bump allocator (zero deps) | **6,254** | **−2,351** | **−59%** |
+
+Function count: 150 (R2) → 33 (R8) = −78%.
+
+Top remaining bloat (top 4 functions = 85% of .text):
+
+| Function | wat lines |
+|---|---|
+| `$27 gqlmin_parse` (top-level export) | 2,256 |
+| `$22` parser internal | 1,704 |
+| `$15` parser internal | 1,476 |
+| `$20` parser internal | 1,260 |
+
+Data section: ~55 bytes (parser keyword pool only).
+
+### Decision (locked by user, post-R8): 9a-inline
+
+User chose **9a-inline** from the R9 options matrix: merge small
+parser helper functions to reduce monomorphization overhead. **No
+API change** (block-string parsing preserved). Estimated gz:
+5,750–6,050 — likely close-miss territory but lowest risk among
+budget-attacking options.
+
+R9 implements; Director R9 assesses post-measurement and recommends
+ship-or-iterate.
+
+**Iron Law for R9:** regression vs R8 (6,254) → BLOCKED.
+
+**Surface plan:** Director R9 surfaces with R6/R7/R8/R9 progression.
+If R9 hits ≤5,120 → topic complete. If 5,121–6,050 → close-miss;
+user chooses to ship-as-is, attempt 9b (block-string drop, API change),
+or revise budget. If >6,050 → inlining didn't yield as expected;
+re-evaluate.
+
+Counter: 2/5 → 3/5 after R9 + Verifier. Two attempts remain in the
+build-std-nightly defect class.
 
 ## Open questions
 
-- R8 measurement-pending: actual gz post-custom-bump-allocator. Projected
-  ~6,800–7,800 bytes. If under 5,120 → topic complete on size axis.
-- After R8: surface to user with three measurements in hand. User decides
-  whether to keep iterating, accept achieved gz, or revise budget.
-- Hard-stop awareness: build-std-nightly defect class advances to 2/5 after R8.
-- Future deferred work (post-budget): SDL parser (step 8), 5 more validation
-  rules, real napi #[napi] body, AST serde derives.
+- R9 measurement-pending: actual gz post-9a-inline. Projected
+  5,750–6,050. If under 5,120 → topic complete on size axis (will
+  not happen per Director estimate but possible). If 5,121–6,050 →
+  surface to user for ship/9b/revise-budget call.
+- After R9: surface with R6/R7/R8/R9 four-data-point progression.
+- Hard-stop awareness: build-std-nightly class advances to 3/5 after R9.
+- Future deferred work (post-budget): SDL parser (step 8), 5 more
+  validation rules, real napi #[napi] body, AST serde derives.
 
 ## Latest director-note
 
