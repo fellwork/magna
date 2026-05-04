@@ -17,7 +17,7 @@ on:
 
 jobs:
   gqlmin-size:
-    name: wasm size gate (≤ 5120 bytes gz)
+    name: wasm size gate (≤ 6500 bytes gz)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,13 +60,19 @@ jobs:
             -o /tmp/gqlmin.opt.wasm
 
       - name: Measure and gate
+        # Raised from 5,120 → 6,500 post-R9 per Option A acceptance.
+        # Original architect estimate was based on a non-Vec parser design
+        # that proved infeasible on stable Rust. R2→R9 achieved 60%
+        # reduction (15,375 → 6,155); the additional ~1,035 bytes to hit
+        # 5,120 require either a parser rewrite (declined) or block-string
+        # drop (declined). 6,500 provides ~345 byte regression headroom.
         run: |
           SIZE=$(gzip -9 -c /tmp/gqlmin.opt.wasm | wc -c)
           echo "gzipped size: $SIZE bytes"
-          echo "budget: 5120 bytes"
-          if [ "$SIZE" -gt 5120 ]; then
-            echo "FAIL: $SIZE bytes exceeds 5120-byte budget"
-            echo "See crates/magna-gqlmin/SIZE.md for risk-ladder status and docs/investigation-r2-wasm-size.md for root-cause analysis."
+          echo "budget: 6500 bytes (raised from 5120 post-R9; see SIZE.md final disposition)"
+          if [ "$SIZE" -gt 6500 ]; then
+            echo "FAIL: $SIZE bytes exceeds 6500-byte budget"
+            echo "See crates/magna-gqlmin/SIZE.md for the final disposition and the regression-headroom rationale."
             exit 1
           fi
           echo "PASS: $SIZE bytes is within budget"

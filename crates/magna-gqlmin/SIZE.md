@@ -726,3 +726,28 @@ Data section unchanged (~55-byte parser keyword pool literal).
 
 R9 verdict: **PARTIAL — underwhelming.** Director R9 should surface
 with R6/R7/R8/R9 progression for ship-or-iterate decision.
+
+## Final disposition (post-R9)
+
+**Status:** ✅ DONE on size axis. User accepted gz=6,155 at R9 surface
+(Option A — accept-and-ship).
+
+**CI gate:** raised from 5,120 → 6,500 to provide ~345 byte regression
+headroom over the achieved 6,155.
+
+**Achieved reduction:** R2 baseline 15,375 → R9 6,155 = **−9,220 bytes
+(60% reduction).** Function count 150 → 32 (−79%).
+
+**Architectural posture:** stable-default workspace + nightly build-std
+for wasm-only target. Custom 256 KiB inline bump allocator (zero
+runtime crate deps). span-indexed Node arena AST. Slice-panic-free
+parser hot paths (no `core::str::Debug` reachability). Block-string
+parsing preserved.
+
+**Banked options for any future re-opening of the size axis:**
+- 9b (block-string drop, API change): est. 5,650–6,000 gz
+- State-table parser rewrite: est. 4,000–5,500 gz, high risk
+- 9b + state-table combined: possibly under 5,120
+
+The build-std-nightly defect class retired at iteration 3/5; two
+attempts remain available if the size axis is ever re-opened.
