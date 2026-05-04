@@ -158,3 +158,156 @@ fn solitary_anonymous_query_passes() {
         "expected no UniqueOperationNames errors for sole anonymous op, got {r:?}"
     );
 }
+
+// ========================================================================
+// Schema-aware validation rules (R11, step 9 completion)
+// ========================================================================
+
+#[cfg(feature = "sdl")]
+mod schema_aware {
+    use magna_gqlmin::{parse_executable_document, parse_schema, validate};
+
+    const SCHEMA: &str = "
+        type Query {
+            user(id: ID!): User
+            search(filter: Filter): [User!]
+            count: Int
+        }
+        type User {
+            id: ID!
+            name: String
+            age: Int
+            best_friend: User
+        }
+        input Filter {
+            name: String
+            min_age: Int
+        }
+        enum Color {
+            RED
+            GREEN
+            BLUE
+        }
+    ";
+
+    fn rules_against(op: &str, schema_src: &str) -> Vec<&'static str> {
+        let doc = parse_executable_document(op).expect("op fixture parses");
+        let schema = parse_schema(schema_src).expect("schema fixture parses");
+        validate(&doc, &schema).into_iter().map(|e| e.rule).collect()
+    }
+
+    fn rules(op: &str) -> Vec<&'static str> {
+        rules_against(op, SCHEMA)
+    }
+
+    // --- KnownTypeNames ------------------------------------------------
+
+    #[test]
+    fn known_type_names_passes_for_declared_type() {
+        let src = "query Q($id: ID!) { user(id: $id) { name } }";
+        let r = rules(src);
+        assert!(
+            !r.contains(&"KnownTypeNames"),
+            "expected no KnownTypeNames errors, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn known_type_names_fails_for_undeclared_type() {
+        let src = "query Q($id: NotAType!) { user(id: \"x\") { name } }";
+        let r = rules(src);
+        assert!(
+            r.contains(&"KnownTypeNames"),
+            "expected KnownTypeNames error, got {r:?}"
+        );
+    }
+
+    // --- FieldsOnCorrectType -------------------------------------------
+
+    #[test]
+    fn fields_on_correct_type_passes_for_declared_field() {
+        let src = "query Q { user(id: \"x\") { name age } }";
+        let r = rules(src);
+        assert!(
+            !r.contains(&"FieldsOnCorrectType"),
+            "expected no FieldsOnCorrectType errors, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn fields_on_correct_type_fails_for_undeclared_field() {
+        let src = "query Q { user(id: \"x\") { ssn } }";
+        let r = rules(src);
+        assert!(
+            r.contains(&"FieldsOnCorrectType"),
+            "expected FieldsOnCorrectType error, got {r:?}"
+        );
+    }
+
+    // --- ScalarLeafs ---------------------------------------------------
+
+    #[test]
+    fn scalar_leafs_passes_for_correct_shape() {
+        let src = "query Q { user(id: \"x\") { name } count }";
+        let r = rules(src);
+        assert!(
+            !r.contains(&"ScalarLeafs"),
+            "expected no ScalarLeafs errors, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn scalar_leafs_fails_when_leaf_has_selection() {
+        let src = "query Q { user(id: \"x\") { name { extra } } }";
+        let r = rules(src);
+        assert!(
+            r.contains(&"ScalarLeafs"),
+            "expected ScalarLeafs error, got {r:?}"
+        );
+    }
+
+    // --- KnownArgumentNames --------------------------------------------
+
+    #[test]
+    fn known_argument_names_passes_for_declared_arg() {
+        let src = "query Q { user(id: \"x\") { name } }";
+        let r = rules(src);
+        assert!(
+            !r.contains(&"KnownArgumentNames"),
+            "expected no KnownArgumentNames errors, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn known_argument_names_fails_for_undeclared_arg() {
+        let src = "query Q { user(id: \"x\", who: \"y\") { name } }";
+        let r = rules(src);
+        assert!(
+            r.contains(&"KnownArgumentNames"),
+            "expected KnownArgumentNames error, got {r:?}"
+        );
+    }
+
+    // --- ArgumentsOfCorrectType ----------------------------------------
+
+    #[test]
+    fn arguments_of_correct_type_passes_for_matching_kinds() {
+        let src = "query Q { user(id: \"x\") { name } }";
+        let r = rules(src);
+        assert!(
+            !r.contains(&"ArgumentsOfCorrectType"),
+            "expected no ArgumentsOfCorrectType errors, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn arguments_of_correct_type_fails_for_mismatched_kind() {
+        // user(id: ID!) — Boolean literal does not match ID
+        let src = "query Q { user(id: true) { name } }";
+        let r = rules(src);
+        assert!(
+            r.contains(&"ArgumentsOfCorrectType"),
+            "expected ArgumentsOfCorrectType error, got {r:?}"
+        );
+    }
+}
