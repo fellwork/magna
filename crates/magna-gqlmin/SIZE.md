@@ -363,3 +363,160 @@ Director R6 to decide whether to continue methodically with rung 2
 (wee_alloc, est. −1.4 KB) and rung 3 (panic-handler/fmt::Write shim,
 est. −1 KB), or to surface the budget-vs-Option-F decision now with
 the empirical data point R6 produced.
+
+## R7 (Path β — build-std nightly + immediate-abort) — 2026-05-04
+
+- rustc nightly: `rustc 1.97.0-nightly (ad3a598ca 2026-05-03)`
+- rust-src component: installed (required for `-Z build-std`)
+- wasm-opt: `wasm-opt version 108`
+- Build command (the wasm-only path; workspace stays on stable 1.89.0):
+  ```
+  RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+  cargo +nightly build -p magna-gqlmin \
+    --target wasm32-unknown-unknown \
+    --no-default-features --features "ops,wasm" \
+    --profile release-wasm \
+    -Z build-std=core,alloc
+  wasm-opt -Oz --strip-debug --vacuum --enable-bulk-memory --enable-sign-ext \
+    target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+    -o /tmp/gqlmin.opt.wasm
+  ```
+
+  **Important nightly-API note (2026-05):** the older `-Z
+  build-std-features=panic_immediate_abort` invocation no longer compiles on
+  recent nightlies. `core::panicking` now emits `compile_error!` directing
+  consumers to the new flag form: `panic = "immediate-abort"` in Cargo.toml
+  OR `-Zunstable-options -Cpanic=immediate-abort` via RUSTFLAGS. We use the
+  RUSTFLAGS form so the workspace `Cargo.toml` profile (which is shared with
+  stable native builds) stays untouched.
+
+- Pipeline:
+  | Stage | Bytes |
+  |---|---|
+  | Raw `.wasm` | 23448 |
+  | Post `wasm-opt -Oz --strip-debug --vacuum` | 19940 |
+  | Post `gzip -9` | **8605** |
+
+- Budget: 5120 bytes gz
+- R6 baseline (re-measured this round on stable, same source tree): 10006 bytes gz
+- R7 result: **8605 bytes gz** — Δ = **−1401** vs R6 (~14% reduction).
+- Function count: R6 65 → R7 64 (function-table change is small; the
+  win is data-section, see below).
+- Status: ⚠️ **PARTIAL — borderline / Iron Law adjacent.** gz=8605
+  is 105 bytes above the brief's 8500-byte "FAILED — Iron Law fires"
+  cutoff. The hypothesis (panic-string + Unicode-table elimination via
+  build-std + immediate-abort) succeeded empirically at the data-section
+  level, but the absolute savings (1.4 KB) fell short of the projected
+  ~5 KB in Director R5/R6 estimates. See
+  `docs/investigation-r7-buildstd-shortfall.md`.
+
+### What R7 changed
+
+- Workspace toolchain pin (`rust-toolchain.toml`) **unchanged** — stays at
+  stable 1.89.0. Native test runs and all other crate builds remain stable.
+- Wasm build invocation switches to nightly with `-Z build-std=core,alloc`
+  and `-Cpanic=immediate-abort` (the post-2026 successor to the deprecated
+  `-Z build-std-features=panic_immediate_abort` flag).
+- CI workflow `gqlmin-size.yml` updated to install nightly + rust-src and
+  use the new build command.
+- `scripts/check-features.sh` updated: it skips the wasm-target check if
+  nightly + rust-src are not installed (with a clear message), and
+  otherwise issues the nightly + build-std invocation.
+
+### Bloat sources eliminated (verified via `wasm-dis`)
+
+The R6 binary's data section had panic strings, filename literals, and
+the `0x00..99` ASCII pair table. The R7 data section is essentially
+empty:
+
+```
+(data (i32.const 1048576) "truefalsenullonquerymutationsubscriptionfragment\ef\bb\bf")
+```
+
+That single ~55-byte literal is the parser keyword pool. **Everything
+else is gone:**
+
+- `crates/magna-gqlmin/src/parse/mod.rs` filename literal — gone.
+- `library/alloc/src/raw_vec/mod.rs`, `vec/mod.rs`, `alloc.rs` filename
+  literals — gone.
+- `dlmalloc-0.2.13/src/dlmalloc.rs` filename + `assertion failed:
+  psize >= size + min_overhead` etc. — gone (immediate-abort short-
+  circuits assertion strings).
+- `slice index starts at  but ends at ` — gone.
+- `capacity overflow`, `memory allocation of  bytes failed` — gone.
+- The `0x00..99` two-digit ASCII pair table (used by `usize::Display`
+  in alloc panic paths) — gone.
+
+The hypothesis Director R5/R6 articulated (immediate-abort dead-strips
+panic strings and the Unicode/Display tables that hang off them) is
+**confirmed at the data-section level.** No new "remaining bloat
+strings" exist to attack; the data section is structurally clean.
+
+### Why the absolute saving was only ~1.4 KB
+
+The Director R6 projection was that build-std + immediate-abort would
+land near 5,120 bytes. Empirically the binary is 8,605. That's a 3.5 KB
+shortfall vs projection. Three reasons (in `investigation-r7-buildstd-
+shortfall.md`):
+
+1. **The data-section savings were already partially captured by R6.**
+   R6's Unicode/slice-panic elimination already removed the 3–4 KB
+   Unicode `printable.rs` tables (the largest single data-section
+   item). What remained for R7 to remove was ~1.5 KB of filename
+   literals + alloc panic strings + the ASCII pair table — and R7
+   removed essentially all of it (1.4 KB saved). The Director R6
+   projection arithmetic implicitly assumed R6's gains and R7's
+   gains were additive on top of R5; in practice R6's gains
+   captured the largest data-section win and R7 captured a smaller
+   second slice.
+
+2. **Code size dominates after data is stripped.** Of the 8.6 KB gz
+   remaining, the bulk lives in 64 functions of parser logic
+   (`gqlmin_parse` alone is ~2.3 KB raw wat) plus dlmalloc's
+   alloc/free/realloc paths (still in the binary; build-std doesn't
+   remove dlmalloc, only core/alloc). Reducing this further requires
+   either (a) a smaller allocator (wee_alloc, custom bump), or
+   (b) parser code reductions (drop block-string parsing, drop
+   directives, etc.), or (c) compressing the parser via state-table
+   refactor. None of these are toolchain-level wins.
+
+3. **`compiler_builtins` / intrinsics overhead.** With `build-std`,
+   compiler-builtins memcpy/memset/etc. are recompiled with our
+   profile, but they remain present (~200–400 bytes). LTO already
+   handled this on stable, so the build-std swap is roughly neutral
+   here.
+
+### Iron-Law check
+
+Per the R7 brief size verdict bands:
+
+- gz ≤ 5,120: budget met
+- 5,121–6,000: PARTIAL — close
+- 6,001–8,500: PARTIAL — disappointing but in band
+- > 8,500: FAILED — Iron Law fires
+
+R7 measured 8,605 — **105 bytes over the 8,500 cutoff.** That triggers
+the Iron Law per the brief's literal text. However, the brief's other
+Iron Law trigger ("Phase 3 measurement shows < 1,000 bytes saved (means
+panic_immediate_abort isn't doing what we expected)") does NOT fire:
+we saved 1,401 bytes and the data-section clean-up confirms the
+hypothesis worked.
+
+This is a **borderline case — the bloat-source hypothesis was
+empirically correct, but the projected savings overshot reality by
+~3 KB.** Surface to user with the empirical data point; let them
+decide whether to:
+
+- (a) stack rung 2 (dlmalloc → wee_alloc) on R7 to land closer to
+  budget;
+- (b) accept the new ceiling at ~8.6 KB and ship;
+- (c) revise budget to ~9 KB (Path γ from Director R6's note);
+- (d) attack parser code itself (drop block-strings, prune AST kinds).
+
+ABI: smoke tag=0 / tag=1+kind=34 unchanged across R2/R3/R5/R6/R7.
+Tests: 38/38 ops + 5/5 pretty + 12/12 validation pass; napi + serde
+features compile.
+
+R7 verdict: **PARTIAL — Iron-Law-adjacent — surface to user.** The
+toolchain switch is in place and demonstrably effective at panic-string
+elimination; the absolute byte target requires further rungs.

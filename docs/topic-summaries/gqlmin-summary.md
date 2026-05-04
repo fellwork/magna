@@ -123,12 +123,30 @@ Implements GraphQL Oct-2021 spec sections 2.1–2.12 (operations) and 3
 
 ## Build pipeline
 
+The wasm size-gate path uses **nightly** with `-Z build-std` (workspace
+`rust-toolchain.toml` stays on stable; nightly is invoked only for the
+wasm-only target):
+
 ```bash
-cargo build -p magna-gqlmin --target wasm32-unknown-unknown \
-  --no-default-features --features "ops,wasm" --profile release-wasm
-wasm-opt -Oz --strip-debug --vacuum <in> -o <out>
+RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+cargo +nightly build -p magna-gqlmin --target wasm32-unknown-unknown \
+  --no-default-features --features "ops,wasm" \
+  --profile release-wasm \
+  -Z build-std=core,alloc
+wasm-opt -Oz --strip-debug --vacuum --enable-bulk-memory --enable-sign-ext \
+  <in> -o <out>
 gzip -9 -c <out> | wc -c   # MUST be < 5120
 ```
+
+Nightly toolchain prerequisite: `rustup toolchain install nightly
+--component rust-src` plus `rustup +nightly target add
+wasm32-unknown-unknown`.
+
+**Note (post-2026-05 nightly):** the older `-Z
+build-std-features=panic_immediate_abort` invocation no longer compiles;
+core now emits a `compile_error!` directing consumers to
+`-Cpanic=immediate-abort` via RUSTFLAGS (which we use, to keep the
+workspace `Cargo.toml` profile shared with stable native builds).
 
 CI gate `gqlmin-size`: fails the PR if gzipped wasm exceeds 5120 bytes.
 
