@@ -1,0 +1,11 @@
+query First {
+  a
+}
+
+mutation Second($x: Int!) {
+  setA(value: $x)
+}
+
+subscription Third {
+  onA
+}

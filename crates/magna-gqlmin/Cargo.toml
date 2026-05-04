@@ -1,0 +1,76 @@
+[package]
+name        = "magna-gqlmin"
+description = "Lightweight GraphQL parser — operations-only at runtime, optional SDL/validation/pretty-error opts. Experimental."
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+# Default native-Rust build: ops parser + std formatting helpers.
+default = ["ops", "std"]
+
+# Always-on operations parser. Splitting it out lets the wasm/no_std build
+# stay minimal and keeps feature lists explicit.
+ops = []
+
+# Pull in std; required by `pretty`, `validate`, and any host-side glue.
+std = []
+
+# Type-system definitions (schema-language). Feature-gated; not in this round.
+sdl = []
+
+# Validation rules. R4 ships ops-only rules (no SDL); schema-aware rules
+# will re-add the `sdl` dep when implemented in R6.
+validate = ["std"]
+
+# Caret/line error rendering. Requires `std`.
+pretty = ["std"]
+
+# Serde derives on AST. Used by napi binding to emit JSON.
+# R4: scaffolded only — `dep:serde` wired so the feature compiles, but
+# `#[derive(Serialize, Deserialize)]` on AST types is deferred to a
+# post-R3 round (R3 owns AST shape this round).
+serde = ["dep:serde"]
+
+# napi-rs binding. Pulls in serde transitively.
+napi = ["std", "ops", "serde", "dep:napi", "dep:napi-derive", "dep:serde_json"]
+
+# Pure no_std + extern "C" wasm exports. NO wasm-bindgen.
+# R8: replaced dlmalloc with an inline bump allocator (see src/wasm.rs).
+wasm = ["ops"]
+
+# Opt-in fatter wasm escape hatch via wasm-bindgen.
+wasm-bindgen = ["wasm"]
+
+[dependencies]
+# Runtime deps: NONE for the wasm build after R8. The wasm allocator is
+# now an inline bump allocator in `src/wasm.rs` — see that module for the
+# parse-once-then-drop lifecycle rationale. R5 reverted the bumpalo arena
+# (R3) in favor of a span-indexed flat-array AST design that keeps the
+# public API single-lifetime (`Document<'src>`) and avoids bumpalo's
+# panic-path `core::fmt` / Unicode-table bloat. See
+# `docs/investigation-r3-bumpalo-panic-bloat.md`.
+
+# R4 host-side optional deps (none of these touch the wasm size budget —
+# all are gated behind features that are not enabled in the wasm build).
+#
+# serde: AST derives are DEFERRED to post-R3 (R3 owns AST shape). For now
+# the feature flag wires the dep so the scaffold compiles.
+serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+# napi: Node/Bun binding. `napi9` matches modern Node ABI.
+napi = { version = "2", default-features = false, features = ["napi9"], optional = true }
+napi-derive = { version = "2", optional = true }
+# serde_json: used by the napi binding to build a stable JSON envelope.
+serde_json = { version = "1", optional = true }
+
+[dev-dependencies]
+# Used by tests/serde_smoke.rs to exercise the AST `Serialize`/`Deserialize`
+# derives added in R10. Already declared as an optional runtime dep above
+# (for the napi binding); the dev-dep entry just makes it usable from
+# integration tests without requiring the `napi` feature.
+serde_json = { version = "1" }

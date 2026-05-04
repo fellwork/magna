@@ -1,0 +1,6 @@
+subscription OnNewMessage($channelId: ID!) {
+  newMessage(channelId: $channelId) {
+    id
+    body
+  }
+}

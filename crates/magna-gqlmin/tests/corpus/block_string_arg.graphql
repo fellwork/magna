@@ -1,0 +1,8 @@
+{
+  render(template: """
+    Hello,
+    "world"
+  """) {
+    output
+  }
+}

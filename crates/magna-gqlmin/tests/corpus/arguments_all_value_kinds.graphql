@@ -1,0 +1,14 @@
+{
+  search(
+    name: "alice"
+    limit: 10
+    ratio: 1.5
+    active: true
+    nothing: null
+    role: ADMIN
+    tags: ["a", "b"]
+    filter: { kind: USER, count: 3 }
+  ) {
+    id
+  }
+}

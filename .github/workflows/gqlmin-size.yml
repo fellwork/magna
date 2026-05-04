@@ -1,0 +1,78 @@
+name: gqlmin-size
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "crates/magna-gqlmin/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gqlmin-size.yml"
+  pull_request:
+    paths:
+      - "crates/magna-gqlmin/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/gqlmin-size.yml"
+
+jobs:
+  gqlmin-size:
+    name: wasm size gate (≤ 6500 bytes gz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The wasm size-gate path uses a NIGHTLY toolchain with -Z build-std
+      # to dead-strip panic strings, Unicode tables, and format machinery
+      # from core/alloc. The workspace `rust-toolchain.toml` stays stable;
+      # nightly is invoked only here for the size-gate target.
+      # See crates/magna-gqlmin/SIZE.md "R7 (Path β ...)" for rationale.
+      - name: Install nightly toolchain (for build-std)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+          components: rust-src
+
+      - name: Install binaryen (wasm-opt)
+        run: |
+          wget -q https://github.com/WebAssembly/binaryen/releases/download/version_119/binaryen-version_119-x86_64-linux.tar.gz
+          tar xzf binaryen-version_119-x86_64-linux.tar.gz -C /tmp
+          echo "/tmp/binaryen-version_119/bin" >> $GITHUB_PATH
+
+      - name: Build wasm runtime (nightly + build-std + immediate-abort)
+        env:
+          # `panic_immediate_abort` was promoted to a real panic strategy
+          # in nightly 2026-05; the old `-Z build-std-features=...` form
+          # now emits a compile_error directing consumers to this flag.
+          RUSTFLAGS: "-Zunstable-options -Cpanic=immediate-abort"
+        run: |
+          cargo +nightly build -p magna-gqlmin \
+            --target wasm32-unknown-unknown \
+            --no-default-features --features "ops,wasm" \
+            --profile release-wasm \
+            -Z build-std=core,alloc
+
+      - name: Optimize with wasm-opt
+        run: |
+          wasm-opt -Oz --strip-debug --vacuum \
+            --enable-bulk-memory --enable-sign-ext \
+            target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+            -o /tmp/gqlmin.opt.wasm
+
+      - name: Measure and gate
+        # Raised from 5,120 → 6,500 post-R9 per Option A acceptance.
+        # Original architect estimate was based on a non-Vec parser design
+        # that proved infeasible on stable Rust. R2→R9 achieved 60%
+        # reduction (15,375 → 6,155); the additional ~1,035 bytes to hit
+        # 5,120 require either a parser rewrite (declined) or block-string
+        # drop (declined). 6,500 provides ~345 byte regression headroom.
+        run: |
+          SIZE=$(gzip -9 -c /tmp/gqlmin.opt.wasm | wc -c)
+          echo "gzipped size: $SIZE bytes"
+          echo "budget: 6500 bytes (raised from 5120 post-R9; see SIZE.md final disposition)"
+          if [ "$SIZE" -gt 6500 ]; then
+            echo "FAIL: $SIZE bytes exceeds 6500-byte budget"
+            echo "See crates/magna-gqlmin/SIZE.md for the final disposition and the regression-headroom rationale."
+            exit 1
+          fi
+          echo "PASS: $SIZE bytes is within budget"

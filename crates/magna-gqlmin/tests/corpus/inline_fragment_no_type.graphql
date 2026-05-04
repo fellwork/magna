@@ -1,0 +1,8 @@
+query Q($expand: Boolean!) {
+  me {
+    ... @include(if: $expand) {
+      avatar
+      bio
+    }
+  }
+}
