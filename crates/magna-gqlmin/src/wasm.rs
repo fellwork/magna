@@ -8,10 +8,82 @@
 //! **No `String`, no `format!`, no allocating error paths here.**
 //! Any allocation is through the raw `alloc::alloc` API.
 
-// Allocator — dlmalloc replaces the default (missing) allocator in no_std.
+// ---------------------------------------------------------------------------
+// Bump allocator (R8) — replaces dlmalloc.
+// ---------------------------------------------------------------------------
+//
+// Lifecycle: `gqlmin_parse` is parse-once-then-drop. Each call allocates a
+// source buffer, a parser arena, and a result buffer; the caller reads the
+// result, then calls `gqlmin_result_free` and `gqlmin_free`. We never reuse
+// memory mid-parse, so a no-op `dealloc` is correct.
+//
+// Reset strategy: **fill-then-rollover** (no reset). 256 KiB supports many
+// parse calls of typical query sizes (median GraphQL operation is well under
+// 1 KiB; the parser arena and result buffer add a few KiB at most). We do
+// NOT reset `OFFSET` inside `gqlmin_parse` because the source bytes that
+// `gqlmin_alloc` placed at offset 0 are still being read by the parser at
+// that point — resetting would let the parser's own allocations overwrite
+// its input. Once `OFFSET` reaches `ARENA_SIZE` further allocations return
+// null, which `handle_alloc_error` traps via `unreachable` (no panic
+// strings emitted, see panic_handler below). For the production wasm
+// runtime the host is expected to instantiate a fresh module per long-
+// running session if it needs to parse more than ~hundreds of operations
+// before reset.
+//
+// SAFETY: wasm32 linear memory is single-threaded; access to `OFFSET` does
+// not need atomics.
+
+#[cfg(feature = "wasm")]
+const ARENA_SIZE: usize = 256 * 1024;
+
+#[cfg(feature = "wasm")]
+static mut ARENA: [u8; ARENA_SIZE] = [0; ARENA_SIZE];
+
+#[cfg(feature = "wasm")]
+static mut OFFSET: usize = 0;
+
+#[cfg(feature = "wasm")]
+struct BumpAllocator;
+
+#[cfg(feature = "wasm")]
+unsafe impl core::alloc::GlobalAlloc for BumpAllocator {
+    unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
+        // SAFETY: single-threaded wasm linear memory; no concurrent access.
+        let align = layout.align();
+        let size = layout.size();
+        let off = OFFSET;
+        // Align the bump pointer up. align is always a power of two per
+        // the Layout invariants, so the mask form is correct.
+        let mask = align.wrapping_sub(1);
+        let start = off.wrapping_add(mask) & !mask;
+        // Bail if alignment overflowed `usize` or pushed past the arena.
+        if start < off || start > ARENA_SIZE {
+            return core::ptr::null_mut();
+        }
+        let end = match start.checked_add(size) {
+            Some(e) => e,
+            None => return core::ptr::null_mut(),
+        };
+        if end > ARENA_SIZE {
+            return core::ptr::null_mut();
+        }
+        OFFSET = end;
+        // Use a raw pointer to the static to avoid creating a reference to
+        // a `mut static` (forbidden under Rust 2024). `core::ptr::addr_of_mut!`
+        // gives us the address without going through a reference.
+        let base: *mut u8 = core::ptr::addr_of_mut!(ARENA) as *mut u8;
+        base.add(start)
+    }
+
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: core::alloc::Layout) {
+        // No-op: parse-once-then-drop lifecycle. Memory is reclaimed only
+        // when the wasm instance is recycled.
+    }
+}
+
 #[cfg(feature = "wasm")]
 #[global_allocator]
-static ALLOC: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+static ALLOC: BumpAllocator = BumpAllocator;
 
 // Panic handler — exactly one allowed per binary; exclude from test builds
 // because the test harness provides its own.
