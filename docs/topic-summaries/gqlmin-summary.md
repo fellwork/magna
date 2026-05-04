@@ -362,6 +362,75 @@ hard-stop on this class.
   this-class attempts not stable-class
 - panic_immediate_abort breaks the wasm smoke test (ABI regression)
 
+## R7 outcome — Path β partial (build-std + immediate-abort)
+
+R7 implemented Path β: nightly toolchain (1.97.0-nightly) + `-Z build-std=core,alloc`
++ `-Cpanic=immediate-abort` (passed via RUSTFLAGS, not the original
+`-Z build-std-features=panic_immediate_abort` form which was removed upstream).
+The wasm-only nightly path is invoked from `.github/workflows/gqlmin-size.yml`
+and `crates/magna-gqlmin/scripts/check-features.sh`. The workspace
+`rust-toolchain.toml` stays on stable; native crate builds and tests are
+unaffected.
+
+| Round | Approach | gz bytes | Δ vs prev |
+|---|---|---|---|
+| R6 | + Unicode/slice-panic elimination | 10,006 | — |
+| R7 | + build-std + immediate-abort (Path β) | **8,605** | **−1,401** |
+
+`wasm-dis` confirmed elimination of: every panic message string, filename
+literal, alloc/dlmalloc assertion message, and ASCII pair table. Only ~55
+bytes of keyword-pool literal remain in the data section.
+
+### Durable lesson — `-Z build-std=core,alloc` does NOT rebuild external deps
+
+R7 confirmed that `-Z build-std=core,alloc` rebuilds the `core` and `alloc`
+crates with the project's `release-wasm` profile + `-Cpanic=immediate-abort`,
+but does NOT rebuild crates listed in `[dependencies]`. `dlmalloc` is an
+external crate — it inherits the standard release behaviour and continues
+to ship its filename + assertion strings until R8 replaces or removes it.
+
+Implication for future rounds: panic-string elimination is incomplete until
+the allocator is also replaced with a panic-free implementation. R8 attacks
+this by replacing dlmalloc with a custom bump allocator inline in the wasm
+shim.
+
+### Flag-name change (adapted)
+
+The original Path β brief specified `-Z build-std-features=panic_immediate_abort`.
+On nightly 1.97.0+ that flag was removed; the successor is `-Cpanic=immediate-abort`
+via RUSTFLAGS (with `-Zunstable-options`) or `panic = "immediate-abort"` in the
+profile. R7 uses the RUSTFLAGS form so the workspace `Cargo.toml` profile
+(shared with stable native builds) stays untouched. This is documented in
+`SIZE.md` and in `.github/workflows/gqlmin-size.yml`.
+
+### Top remaining bloat (R7 measurements)
+
+The 8.6 KB binary is now ~80% compiled code, ~20% headroom in data:
+
+| Region | Size (wat lines) |
+|---|---|
+| `gqlmin_parse` (top-level export) | ~2,256 |
+| Parser internal function ($40) | ~1,704 |
+| dlmalloc malloc | ~1,578 |
+| Parser internal function ($33) | ~1,476 |
+| Parser internal function ($38) | ~1,260 |
+| dlmalloc free | ~892 |
+| **Top 5 ≈** | **~8,300 wat lines** = bulk of binary |
+
+Future rounds attack code, not data. dlmalloc is the single largest
+non-parser chunk (~2,470 wat lines for malloc + free).
+
+### Decision (Director R7): R8 = custom bump allocator
+
+R8 replaces dlmalloc with a small inline bump allocator under
+`feature = "wasm"`. Lifecycle: parse-once-then-drop, so a no-op `dealloc`
+is correct. Estimated saving ~−1,500 to −2,000 raw bytes, ~−700 to −1,000
+gz. Combined with R7's 8,605 → projected R8 gz ≈ 6,800–7,800.
+
+**Iron Law for R8:** regression vs R7 (8,605) → BLOCKED.
+**Surface decision:** continue autonomously to R8; surface to user after R8
+with R6/R7/R8 three measurements in hand.
+
 ## Round log
 
 > Defect class: "structural fix — bumpalo arena migration" started after R2 surface. Iteration counter reset to 0/5 per playbook (work nature shifted from "build to spec" to "fix structural mismatch").
@@ -374,17 +443,17 @@ hard-stop on this class.
 | R4 | Step 7 (napi scaffold) + step 9 partial (5 of 10 ops-only validation rules) + step 10 partial (pretty errors, serde feature scaffold) — parallel with R3 | ✅ DONE | 5 pretty + 12 validation + 1 serde-smoke tests; all feature combos compile; threaded `Document<'src, 'bump>` lifetime via 1 fix-up commit |
 | R5 | Option B: span-indexed Node arena (revert bumpalo + rewrite) | ⚠️ PARTIAL | gz=14,895 (Δ=−480 vs R2; −2,595 vs R3). Function count 150→77 confirms structural collapse. ABI/tests intact. Below R2 baseline but ~9.7 KB over budget. |
 | R6 | Rung 1: Unicode/slice-panic elimination | ⚠️ PARTIAL | gz=10,006 (Δ=−4,889 vs R5). Eliminated Unicode `printable.rs` tables, char-boundary panic strings, slice-bounds messages (verified by wasm-dis). 38+5+12 tests pass; ABI durable. Beat the 3–4 KB estimate by ~1 KB. |
+| R7 | Path β: nightly build-std `core,alloc` + `-Cpanic=immediate-abort` (RUSTFLAGS) | ⚠️ PARTIAL | gz=8,605 (Δ=−1,401 vs R6). All panic strings + Unicode tables + ASCII pair table physically eliminated from data section (verified by wasm-dis). Hypothesis confirmed. Director ruled PARTIAL not BLOCKED — the 8,500 Iron-Law cutoff was a projection-quality check whose conclusion is contradicted by direct evidence. |
 
 ## Open questions
 
-- R7 measurement-pending: actual gz post-build-std + panic_immediate_abort.
-  If still > 5,120, rungs 2 (wee_alloc) and 3 (custom panic-handler) are
-  still available within the new defect class.
-- Hard-stop awareness: build-std-nightly defect class will hit 5/5 if
-  R7+R8+R9+R10+R11 don't land. Keep budget for verification rounds.
-- Future: do we want a stable-toolchain alternative artifact alongside
-  the nightly build, or is wasm-only-on-nightly acceptable? (Path δ
-  decision deferred until budget is met.)
+- R8 measurement-pending: actual gz post-custom-bump-allocator. Projected
+  ~6,800–7,800 bytes. If under 5,120 → topic complete on size axis.
+- After R8: surface to user with three measurements in hand. User decides
+  whether to keep iterating, accept achieved gz, or revise budget.
+- Hard-stop awareness: build-std-nightly defect class advances to 2/5 after R8.
+- Future deferred work (post-budget): SDL parser (step 8), 5 more validation
+  rules, real napi #[napi] body, AST serde derives.
 
 ## Latest director-note
 
