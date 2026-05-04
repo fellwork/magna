@@ -520,3 +520,104 @@ features compile.
 R7 verdict: **PARTIAL — Iron-Law-adjacent — surface to user.** The
 toolchain switch is in place and demonstrably effective at panic-string
 elimination; the absolute byte target requires further rungs.
+
+## R8 (custom bump allocator — replaces dlmalloc) — 2026-05-04
+
+- rustc nightly: same as R7 (`rustc 1.97.0-nightly`)
+- rust-src component: installed
+- wasm-opt: `wasm-opt version 108`
+- Build command (unchanged from R7 — Path β carry-forward; only the
+  source / Cargo.toml changed):
+  ```
+  RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+  cargo +nightly build -p magna-gqlmin \
+    --target wasm32-unknown-unknown \
+    --no-default-features --features "ops,wasm" \
+    --profile release-wasm \
+    -Z build-std=core,alloc
+  wasm-opt -Oz --strip-debug --vacuum --enable-bulk-memory --enable-sign-ext \
+    target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+    -o /tmp/gqlmin.opt.wasm
+  ```
+
+- Pipeline:
+  | Stage | Bytes |
+  |---|---|
+  | Raw `.wasm` | 16734 |
+  | Post `wasm-opt -Oz --strip-debug --vacuum` | 14560 |
+  | Post `gzip -9` | **6254** |
+
+- Budget: 5120 bytes gz
+- R7 baseline: 8605 bytes gz
+- R8 result: **6254 bytes gz** — Δ = **−2351** vs R7 (~27% reduction).
+- Function count: R7 64 → **R8 33** (−31 functions; dlmalloc's
+  malloc/free/sbrk family is gone).
+- Status: ⚠️ **PARTIAL — close.** gz=6254 lands inside the
+  "5,121 ≤ gz ≤ 6,500" verdict band per Director R7's R8 brief
+  (§4 Verdict bands). Beats the projected R8 ceiling (~6,800) by
+  ~550 bytes. Budget gap remains 1,134 bytes; one more focused rung
+  (parser code reduction or block-string drop) may close it.
+
+### What R8 changed
+
+- `src/wasm.rs`: replaced the `dlmalloc::GlobalDlmalloc` global allocator
+  with an inline `BumpAllocator` over a `static mut ARENA: [u8; 256 *
+  1024]`. `alloc` aligns + bumps + bounds-checks, returning null on
+  overflow. `dealloc` is a no-op — the parse-once-then-drop lifecycle
+  doesn't need a free path. Reset strategy is **fill-then-rollover**
+  (no in-call reset): the source bytes that `gqlmin_alloc` writes at
+  offset 0 must persist while the parser is reading them, so resetting
+  the bump pointer at the start of `gqlmin_parse` would corrupt the
+  parser's input. 256 KiB is sufficient for many parse calls of typical
+  query sizes; production hosts that need more capacity should
+  instantiate a fresh wasm instance per long-running session.
+- `Cargo.toml`: removed the `dlmalloc` optional dep and the
+  `dep:dlmalloc` entry from the `wasm` feature dep list. The wasm build
+  now has **zero runtime crate deps**.
+- `scripts/check-features.sh`: comment lines updated to reflect the new
+  allocator (no functional change).
+
+### Bloat sources eliminated (verified via `wasm-dis`)
+
+R7 still had two large dlmalloc functions:
+
+- `$11` (1,578 wat lines) — dlmalloc malloc.
+- `$59` (892 wat lines) — dlmalloc free.
+
+R8's binary has 33 functions total (vs R7's 64). The dlmalloc family
+(malloc/free/realloc + sbrk + chunk-merging helpers) is fully absent.
+The bump allocator's `alloc` is inlined into callers; `dealloc` is a
+no-op and gets fully eliminated. No new functions appeared.
+
+### Remaining bloat (top 4 functions)
+
+| Region | wat lines | Notes |
+|---|---|---|
+| `$27` (gqlmin_parse top-level export) | 2,256 | Same as R7. |
+| `$22` (parser internal) | 1,704 | Same as R7's $40. |
+| `$15` (parser internal) | 1,476 | Same as R7's $33. |
+| `$20` (parser internal) | 1,260 | Same as R7's $38. |
+| **Top 4 total** | **6,696** | ~85% of the .text section. |
+
+The data section is unchanged from R7 — still just the ~55-byte parser
+keyword pool literal. The remaining size is essentially all parser
+code, as Director R7 predicted ("future rounds attack code, not data").
+
+### Iron-Law check (per R8 brief)
+
+- gz ≤ 5,120 → PASS: NOT MET (6254 > 5120).
+- 5,121 ≤ gz ≤ 6,500 → PARTIAL — close: **THIS BAND.**
+- 6,501 ≤ gz < 8,605 → PARTIAL — disappointing: not in band.
+- gz ≥ 8,605 → BLOCKED (regression vs R7): not in band.
+- Sub-threshold saving (< 500 bytes vs R7): not triggered (saved 2,351).
+- ABI break: not triggered (smoke tag=0 / tag=1+kind=34 unchanged).
+- Test regression: not triggered (38/38 ops + 5/5 pretty + 12/12
+  validation pass; napi + serde + workspace cargo check clean).
+
+R8 verdict: **PARTIAL — close.** Bump allocator landed cleanly,
+saving ~27% of the binary, beating the projected ~6,800-byte R8
+ceiling. Surface to user with three measurements (R6 stable 10,006 /
+R7 build-std 8,605 / R8 build-std + bump 6,254) and let user pick:
+(a) commit to R9 with parser-code reduction (state-table refactor or
+block-string drop, est. −600 to −1,500 bytes), (b) accept the new
+~6.2 KB ceiling and ship, (c) revise budget.
