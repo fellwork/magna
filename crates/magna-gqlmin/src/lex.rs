@@ -165,7 +165,6 @@ impl<'src> Lexer<'src> {
 
     // ---- Internals ----------------------------------------------------
 
-    #[inline(always)]
     fn single(&mut self, kind: TokenKind) -> Result<Token, ParseError> {
         let start = self.pos as u32;
         self.pos += 1;
@@ -202,7 +201,6 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    #[inline(always)]
     fn lex_spread(&mut self) -> Result<Token, ParseError> {
         let start = self.pos;
         if self.bytes.get(start + 1).copied() == Some(b'.')
@@ -220,7 +218,6 @@ impl<'src> Lexer<'src> {
         ))
     }
 
-    #[inline(always)]
     fn lex_name(&mut self) -> Result<Token, ParseError> {
         let start = self.pos;
         // First byte already verified by caller match arm.

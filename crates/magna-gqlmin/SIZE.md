@@ -621,3 +621,108 @@ R7 build-std 8,605 / R8 build-std + bump 6,254) and let user pick:
 (a) commit to R9 with parser-code reduction (state-table refactor or
 block-string drop, est. −600 to −1,500 bytes), (b) accept the new
 ~6.2 KB ceiling and ship, (c) revise budget.
+
+## R9 (9a-inline — parser helper merging) — 2026-05-04
+
+- rustc nightly: same as R7/R8 (`rustc 1.97.0-nightly`)
+- rust-src component: installed
+- wasm-opt: `wasm-opt version 108`
+- Build command (unchanged from R7/R8 — Path β carry-forward; only the
+  source changed):
+  ```
+  RUSTFLAGS="-Zunstable-options -Cpanic=immediate-abort" \
+  cargo +nightly build -p magna-gqlmin \
+    --target wasm32-unknown-unknown \
+    --no-default-features --features "ops,wasm" \
+    --profile release-wasm \
+    -Z build-std=core,alloc
+  wasm-opt -Oz --strip-debug --vacuum --enable-bulk-memory --enable-sign-ext \
+    target/wasm32-unknown-unknown/release-wasm/magna_gqlmin.wasm \
+    -o /tmp/gqlmin.opt.wasm
+  ```
+
+- Pipeline (final committed conservative variant):
+  | Stage | Bytes |
+  |---|---|
+  | Raw `.wasm` | 16504 |
+  | Post `wasm-opt -Oz --strip-debug --vacuum` | 14422 |
+  | Post `gzip -9` | **6155** |
+
+- Budget: 5120 bytes gz
+- R8 baseline: 6254 bytes gz
+- R9 result: **6155 bytes gz** — Δ = **−99** vs R8 (~1.6% reduction).
+- Function count: R8 33 → **R9 32** (−1 function).
+- Status: ⚠️ **PARTIAL — underwhelming.** gz=6155 lands inside the
+  brief's "6,051 ≤ gz < 6,254" band: "PARTIAL but underwhelming —
+  inlining didn't yield as expected." Iron Law does NOT fire (R9 is 99
+  bytes below R8). Surface to Director R9 for ship-or-iterate decision.
+
+### What R9 changed (final committed set)
+
+Only the truly-tiny one-liners gained `#[inline(always)]`:
+
+| Helper | File | Body size | Call sites |
+|---|---|---|---|
+| `Span::new` | `src/lex.rs` | 1 line (`Self { start, end }`) | many (lex + parse) |
+| `Lexer::peek_byte` | `src/lex.rs` | 1 line (`self.bytes.get(self.pos).copied()`) | ~12 in lex_number |
+
+The other 9 candidates from the audit (`Parser::peek`, `bump_tok`,
+`slice`, `expect`, `new`, `open_list`, `close_list`, `Document::slice`,
+`Lexer::single`, `lex_spread`, `lex_name`) were either reverted after
+the phase-3 aggressive run produced a +593 regression, or kept at
+their pre-R9 `#[inline]` (no change in attribute). See
+`docs/investigation-r9-inline-regression.md` for the bisection log.
+
+### Why the saving was small
+
+Phase-3 aggressive variant (all 11 candidates `inline(always)`)
+measured **gz=6847** (Δ=+593 vs R8) — Iron Law fired. Bisection
+identified the regressors:
+
+| Add-on | Δ vs minimal (6155) |
+|---|---|
+| + `Parser::peek` (5-line body, ~12 sites) | +433 |
+| + `Parser::bump_tok` (5-line body, ~14 sites) | +204 |
+| + `Parser::slice` (4-line body, 5 sites) | +68 |
+
+The brief's hypothesis ("over-inlining usually hurts; sometimes
+`#[inline(always)]` removes a call-site sharing opportunity") is
+empirically confirmed at this binary scale. The R8 binary was already
+near a Pareto frontier: LLVM had picked optimal inline/outline choices
+across the 5-line helpers, and forcing all-inline at those sites
+broke outlining without giving enough specialisation wins to
+compensate.
+
+The wins are confined to the one-liner end of the spectrum where
+`#[inline(always)]` is essentially redundant with what LLVM already
+does — but documents intent and locks behaviour.
+
+### Bloat sources remaining (unchanged from R8)
+
+Top 4 functions by wat-line count (R9):
+
+| Function | wat lines |
+|---|---|
+| `$26` (gqlmin_parse top-level export) | 2,257 |
+| `$22` (parser internal) | 1,642 |
+| `$15` (parser internal) | 1,477 |
+| `$20` (parser internal) | 1,261 |
+| **Top 4 total** | **6,637** |
+
+Versus R8's top-4 (6,696 wat lines). The structural picture is
+unchanged: parser body dominates. R9 trimmed ~60 wat lines off the
+top 4 (mostly the second function, `$22`, dropped from 1704 → 1642).
+Data section unchanged (~55-byte parser keyword pool literal).
+
+### Iron-Law check (per R9 brief)
+
+- gz ≤ 5,120 → PASS: NOT MET (6155 > 5120).
+- 5,121 ≤ gz ≤ 6,050 → PARTIAL — close-miss: not in band.
+- 6,051 ≤ gz < 6,254 → **PARTIAL — underwhelming: THIS BAND.**
+- gz ≥ 6,254 → BLOCKED (regression vs R8): not in band (R9 is 99
+  below R8 on the committed conservative variant; the aggressive
+  variant tripped this and was reverted).
+- Build / smoke / test failures: not triggered (see phase 4).
+
+R9 verdict: **PARTIAL — underwhelming.** Director R9 should surface
+with R6/R7/R8/R9 progression for ship-or-iterate decision.
