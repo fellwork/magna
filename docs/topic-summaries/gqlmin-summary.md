@@ -194,6 +194,11 @@ or a minimal serializer; do not add `insta` as a dependency.
   (decided post-R8). Block-string parsing preserved. Estimated gz
   5,750–6,050. State-table rewrite explicitly avoided due to risk
   vs counter-budget tradeoff.
+- Final size disposition: **Option A — accept-and-ship at gz=6,155**
+  (decided post-R9). CI gate target raised from 5,120 → 6,500
+  (provides ~345 byte regression headroom). The build-std-nightly
+  defect class retires at 3/5 with two attempts banked. Block-string
+  parsing preserved; no API change vs the R5 baseline.
 
 ## Structural size constraint (R2 finding)
 
@@ -449,6 +454,8 @@ with R6/R7/R8 three measurements in hand.
 | R6 | Rung 1: Unicode/slice-panic elimination | ⚠️ PARTIAL | gz=10,006 (Δ=−4,889 vs R5). Eliminated Unicode `printable.rs` tables, char-boundary panic strings, slice-bounds messages (verified by wasm-dis). 38+5+12 tests pass; ABI durable. Beat the 3–4 KB estimate by ~1 KB. |
 | R7 | Path β: nightly build-std `core,alloc` + `-Cpanic=immediate-abort` (RUSTFLAGS) | ⚠️ PARTIAL | gz=8,605 (Δ=−1,401 vs R6). All panic strings + Unicode tables + ASCII pair table physically eliminated from data section (verified by wasm-dis). Hypothesis confirmed. Director ruled PARTIAL not BLOCKED — the 8,500 Iron-Law cutoff was a projection-quality check whose conclusion is contradicted by direct evidence. |
 | R8 | Custom bump allocator (replaces dlmalloc) | ⚠️ PARTIAL | gz=6,254 (Δ=−2,351 vs R7). Wasm distribution now has zero runtime crate deps. R2→R8 = 59% reduction. Top 4 functions = 85% of .text (parser body). 1,134 over budget. |
+| R9 | 9a-inline (parser helper merging via `#[inline(always)]`) | ⚠️ PARTIAL | gz=6,155 (Δ=−99 vs R8). Bisection found R8 was already at LLVM Pareto frontier — only 2 of 11 candidate inlines kept (Span::new, Lexer::peek_byte). Aggressive variant regressed +593. All tests pass; block-string parsing preserved. |
+| **size-axis closeout** | User accepts at 6,155 (Option A). CI gate moves to 6,500. | ✅ DONE on size axis | Topic retired with 60% reduction (R2 15,375 → R9 6,155). 9b/9c/state-table options not pursued. Two counter slots banked (3/5). |
 
 ## R8 outcome + 9a-inline decision (parser helper merging)
 
@@ -501,16 +508,81 @@ re-evaluate.
 Counter: 2/5 → 3/5 after R9 + Verifier. Two attempts remain in the
 build-std-nightly defect class.
 
+## R9 outcome + Option A closeout (size axis retired)
+
+R9 implemented 9a-inline (parser helper merging via `#[inline(always)]`).
+Builder ran an aggressive variant first (all 11 candidate helpers) and
+measured gz=6,847 — **+593 bytes worse than R8**, which would have
+fired the Iron Law. Bisection identified the helpful subset:
+
+| Add-on (vs minimal one-liner-only) | Δ |
+|---|---|
+| `Parser::peek` (5-line, 12 sites) | +433 |
+| `Parser::bump_tok` (5-line, 14 sites) | +204 |
+| `Parser::slice` (4-line, 5 sites) | +68 |
+
+Only `Span::new` and `Lexer::peek_byte` (true one-liners) survived.
+
+| Round | Approach | gz | Cumulative vs R2 |
+|---|---|---|---|
+| R2 baseline | Vec + dlmalloc | 15,375 | 0% |
+| R5 | span-indexed Node arena | 14,895 | −3% |
+| R6 | + Unicode/slice-panic eliminated | 10,006 | −35% |
+| R7 | + nightly build-std + immediate-abort | 8,605 | −44% |
+| R8 | + custom bump allocator (zero deps) | 6,254 | −59% |
+| R9 | + 9a-inline | **6,155** | **−60%** |
+| Budget | — | 5,120 | gap: 1,035 |
+
+### Durable lesson — LLVM Pareto frontier on parser code
+
+**Don't blanket-apply `#[inline(always)]` to medium parser helpers.**
+LLVM's cost model already inlines tight one-liners and outlines
+shared tail patterns (Result/Option propagation, panic-free fallbacks).
+Forcing inline on 5-line helpers with 10+ call sites breaks LLVM's
+existing outlining and grows the binary. Wins, when they exist, live
+at the one-liner end where the directive is largely redundant with
+LLVM's default.
+
+This is durable knowledge for any future round attacking the parser
+code itself.
+
+### Decision (locked by user, post-R9): Option A — accept-and-ship
+
+User accepted the achieved size at gz=6,155 (1,035 over the original
+5,120 budget). 9b (block-string drop, API change) projected to another
+close-miss at 5,650–6,000 and was declined. State-table rewrite was
+declined at R8 surface.
+
+**Closeout actions (Builder R10):**
+- CI gate raised from 5,120 → 6,500 in `.github/workflows/gqlmin-size.yml`
+  (provides ~345 byte regression headroom from current gz=6,155).
+- README size note added: "magna-gqlmin wasm operations parser ships
+  at 6.0 KB gz on nightly build-std + custom bump allocator."
+- SIZE.md status updated to ✅ DONE on size axis at 6,155.
+- AST serde derives (step 10 completion).
+- Real napi `#[napi]` body with serde_json (step 7 completion).
+- CHANGELOG.md + GOVERNANCE.md updated (step 12).
+
+**Deferred to Builder R11 (size-axis is closed; these are pure feature
+work):**
+- SDL parser (step 8) — new src/parse/sdl.rs + Parser extension.
+- 5 schema-aware validation rules (step 9 completion) — extends
+  validate.rs to use SDL types.
+
+Build-std-nightly defect class retires at **3/5 with two attempts
+banked**. The R9 Pareto-frontier finding is durable knowledge for any
+future re-opening of the size axis.
+
 ## Open questions
 
-- R9 measurement-pending: actual gz post-9a-inline. Projected
-  5,750–6,050. If under 5,120 → topic complete on size axis (will
-  not happen per Director estimate but possible). If 5,121–6,050 →
-  surface to user for ship/9b/revise-budget call.
-- After R9: surface with R6/R7/R8/R9 four-data-point progression.
-- Hard-stop awareness: build-std-nightly class advances to 3/5 after R9.
-- Future deferred work (post-budget): SDL parser (step 8), 5 more
-  validation rules, real napi #[napi] body, AST serde derives.
+- Build-order steps 7 (napi body), 8 (SDL parser), 9 (5 more validation
+  rules), 10 (serde derives), 12 (CHANGELOG/GOVERNANCE) — closeout work
+  for R10/R11.
+- Step 11 (SFC compiler integration) remains DEFERRED — not in scope
+  for this session per state-gqlmin.md locked decisions.
+- All open size-axis questions resolved by Option A. Future revisitation
+  could target 9b (block-string drop, ~5,650-6,000 gz) or a state-table
+  parser rewrite, both with two counter slots banked.
 
 ## Latest director-note
 
