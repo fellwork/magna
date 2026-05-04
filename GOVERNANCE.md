@@ -131,6 +131,7 @@ track, will be rare, and will be flagged in CHANGELOG):
 - `magna-build`
 - `magna-subscriptions`
 - `magna-remote`
+- `magna-gqlmin` (added v0.1.0)
 
 **The `magna` binary itself:** the CLI surface (subcommand names, flag
 names, exit codes, stdout contract) is **stable**. The internal wiring
