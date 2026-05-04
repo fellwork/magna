@@ -15,6 +15,10 @@ modes (native Rust, wasm32 via build-std nightly, napi-rs).
 - 20-case acceptance corpus
 - 5 ops-only validation rules: NoUndefinedVariables, NoUnusedVariables,
   NoUnusedFragments, KnownFragmentNames, UniqueOperationNames
+- SDL parser (Oct-2021 spec § 3 type system definitions; `sdl` feature)
+- 5 additional schema-aware validation rules (KnownTypeNames,
+  FieldsOnCorrectType, ScalarLeafs, KnownArgumentNames, ArgumentsOfCorrectType;
+  gated on `sdl,validate`)
 - Pretty error rendering with caret diagnostics (`pretty` feature)
 - AST serde derives (`serde` feature)
 - napi-rs binding (`napi` feature)

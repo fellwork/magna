@@ -18,6 +18,15 @@ the eventual SFC compiler integration.
 See `SIZE.md` for the full reduction journey (R2 baseline 15,375 →
 final 6,155 = −60%).
 
+## Features
+
+- Operations parser (default)
+- SDL parser (`sdl` feature) — type system definitions per GraphQL Oct-2021 spec § 3
+- Validation: 5 ops-only rules (`validate` feature) + 5 schema-aware rules (`sdl,validate`)
+- Pretty error rendering (`pretty` feature)
+- AST serde derives (`serde` feature)
+- napi-rs binding (`napi` feature)
+
 A lightweight GraphQL parser sized for three distribution modes from a single
 Rust source: a `wasm32-unknown-unknown` runtime build with a hard ≤5 KB gz
 budget, a napi-rs binding for Node/Bun consumers, and a native Rust dependency
