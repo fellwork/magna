@@ -452,7 +452,7 @@ impl<'src> Document<'src> {
         self.slice(r, project_value)
     }
 
-    #[inline]
+    #[inline(always)]
     fn slice<'doc, T: ?Sized + 'doc>(
         &'doc self,
         r: NodeRange,
@@ -497,6 +497,7 @@ struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
+    #[inline(always)]
     fn new(src: &'src str) -> Self {
         Self {
             src,
@@ -507,6 +508,7 @@ impl<'src> Parser<'src> {
         }
     }
 
+    #[inline(always)]
     fn peek(&mut self) -> Result<Token, ParseError> {
         if let Some(t) = self.peeked {
             return Ok(t);
@@ -516,6 +518,7 @@ impl<'src> Parser<'src> {
         Ok(t)
     }
 
+    #[inline(always)]
     fn bump_tok(&mut self) -> Result<Token, ParseError> {
         if let Some(t) = self.peeked.take() {
             return Ok(t);
@@ -523,6 +526,7 @@ impl<'src> Parser<'src> {
         self.lexer.next_token()
     }
 
+    #[inline(always)]
     fn slice(&self, span: Span) -> &'src str {
         // Use `get` (returning Option) instead of `[..]` indexing so the
         // `core::str::index` panic path — which transitively reaches the
@@ -535,6 +539,7 @@ impl<'src> Parser<'src> {
         self.src.get(s..e).unwrap_or("")
     }
 
+    #[inline(always)]
     fn expect(&mut self, kind: TokenKind, err: ParseErrorKind) -> Result<Token, ParseError> {
         let t = self.peek()?;
         if t.kind == kind {
@@ -547,14 +552,14 @@ impl<'src> Parser<'src> {
     /// Open a list production: returns the current scratch length.
     /// Push child `Node`s onto `self.scratch` between this call and the
     /// matching `close_list`.
-    #[inline]
+    #[inline(always)]
     fn open_list(&self) -> usize {
         self.scratch.len()
     }
 
     /// Close a list production: drain `scratch[start..]` into `self.nodes`
     /// en bloc and return the resulting NodeRange.
-    #[inline]
+    #[inline(always)]
     fn close_list(&mut self, scratch_start: usize) -> NodeRange {
         let count = self.scratch.len() - scratch_start;
         let nodes_start = self.nodes.len() as u32;
