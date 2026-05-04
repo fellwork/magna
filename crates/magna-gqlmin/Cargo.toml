@@ -41,19 +41,20 @@ serde = ["dep:serde"]
 napi = ["std", "ops", "serde", "dep:napi", "dep:napi-derive", "dep:serde_json"]
 
 # Pure no_std + extern "C" wasm exports. NO wasm-bindgen.
-wasm = ["ops", "dep:dlmalloc"]
+# R8: replaced dlmalloc with an inline bump allocator (see src/wasm.rs).
+wasm = ["ops"]
 
 # Opt-in fatter wasm escape hatch via wasm-bindgen.
 wasm-bindgen = ["wasm"]
 
 [dependencies]
-# Runtime deps: `dlmalloc` (wasm allocator, gated on `wasm`) is the only
-# crate dependency in the wasm build. R5 reverted the bumpalo arena (R3)
-# in favor of a span-indexed flat-array AST design that keeps the public
-# API single-lifetime (`Document<'src>`) and avoids bumpalo's panic-path
-# `core::fmt` / Unicode-table bloat. See
+# Runtime deps: NONE for the wasm build after R8. The wasm allocator is
+# now an inline bump allocator in `src/wasm.rs` — see that module for the
+# parse-once-then-drop lifecycle rationale. R5 reverted the bumpalo arena
+# (R3) in favor of a span-indexed flat-array AST design that keeps the
+# public API single-lifetime (`Document<'src>`) and avoids bumpalo's
+# panic-path `core::fmt` / Unicode-table bloat. See
 # `docs/investigation-r3-bumpalo-panic-bloat.md`.
-dlmalloc = { version = "0.2", optional = true, default-features = false, features = ["global"] }
 
 # R4 host-side optional deps (none of these touch the wasm size budget —
 # all are gated behind features that are not enabled in the wasm build).

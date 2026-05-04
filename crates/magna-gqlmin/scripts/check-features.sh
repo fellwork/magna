@@ -34,8 +34,9 @@ run() {
 # Default features (`ops` + `std`).
 run
 
-# `ops + wasm` — pure no_std wasm build with dlmalloc allocator and extern "C"
-# export shim. The wasm feature provides the global allocator and panic handler.
+# `ops + wasm` — pure no_std wasm build with the inline bump allocator (R8)
+# and extern "C" export shim. The wasm feature provides the global allocator
+# and panic handler.
 # Requires wasm32-unknown-unknown target.
 #
 # As of R7 (2026-05) the production wasm build path goes through nightly
@@ -78,8 +79,9 @@ run --features ops,serde
 # must compose correctly. Flagged by Verifier R1 as missing.
 run --features ops,pretty
 
-# `wasm-bindgen` — escape hatch feature. Pulls in wasm transitively (hence dlmalloc)
-# but adds no wasm-bindgen code in R2 (deferred). Verify the flag composes on wasm32.
+# `wasm-bindgen` — escape hatch feature. Pulls in wasm transitively (hence the
+# bump allocator and panic handler) but adds no wasm-bindgen code in R2
+# (deferred). Verify the flag composes on wasm32.
 echo
 echo "==> cargo check -p $CRATE --target wasm32-unknown-unknown --no-default-features --features ops,wasm-bindgen"
 cargo check -p "$CRATE" --target wasm32-unknown-unknown --no-default-features --features "ops,wasm-bindgen"
