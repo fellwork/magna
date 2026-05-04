@@ -168,6 +168,10 @@ or a minimal serializer; do not add `insta` as a dependency.
 - Wasm target: generic `wasm32-unknown-unknown`, browser-tuned
 - Validation: 10 starter rules
 - Wasm AST: span-indexed flat arrays, `Document<'src>` single lifetime (decided post-R3 after Option A refuted; R5 implements)
+- Wasm build toolchain: stable-default + **Path β nightly build-std for wasm-only**
+  (decided post-R6). Goal: land ≤5,120 bytes gz via `-Z build-std=core,alloc`
+  + `-Z build-std-features=panic_immediate_abort`. Workspace `rust-toolchain.toml`
+  remains stable; nightly is invoked only for the wasm size-gate target.
 
 ## Structural size constraint (R2 finding)
 
@@ -283,6 +287,63 @@ then re-assess with empirical data before the budget-vs-Option-F surface.
 Counter advanced to **2/5** after R5 (3 attempts remain in the structural-fix
 defect class).
 
+## R6 outcome + Path β decision (build-std nightly)
+
+R6 implemented rung 1 (Unicode/slice-panic elimination): replaced 17
+byte-index panic-on-bounds reads + 1 `&str` slice in `lex.rs`, plus
+1 slice + 1 `&Node` index in `parse/mod.rs`, with `.get(...).unwrap_or(...)`
+patterns. Zero new `unsafe`, zero API changes, zero new deps.
+
+| Round | Approach | gz bytes | Δ vs prev |
+|---|---|---|---|
+| R5 | span-indexed Node arena | 14,895 | — |
+| R6 | + Unicode/slice-panic elimination | **10,006** | **−4,889** |
+
+`wasm-dis` confirmed elimination of: Unicode `printable.rs` property tables,
+filename literals from `library/core/src/str/mod.rs` and `lex.rs`,
+"byte index … is not a char boundary", "range end index … out of range",
+"index out of bounds: the len is …", "begin <= end ( <= ) when slicing".
+
+### Math reality after R6 (empirically validated)
+
+Combining the remaining stable rungs:
+
+| Rung | Action | Estimated savings |
+|---|---|---|
+| 3 | Custom panic_handler / fmt::Write shim | ~1.0 KB |
+| 2 | dlmalloc → wee_alloc swap | ~1.4 KB (R2-measured) |
+| misc | Single slice msg + parse filename + ASCII pair table | ~0.4 KB |
+| **Total stable best-case** | | **~2.8 KB** |
+
+Projected stable-only landing: gz ≈ 7,200 bytes — still ~2,080 over the
+5,120 budget and ~200 over the 7,000 Iron Law ceiling. **The 5,120 target
+is not reachable on stable Rust.**
+
+### Decision (locked by user, post-R6): Path β — Option F build-std nightly
+
+Skip remaining stable rungs. Configure `cargo +nightly build` with
+`-Z build-std=core,alloc` and `-Z build-std-features=panic_immediate_abort`
+to dead-strip panic strings/Unicode tables/format-string machinery from
+core/alloc itself. R7 implements + measures.
+
+**Scope:** nightly is used ONLY for the wasm size-gate build path. The
+workspace `rust-toolchain.toml` stays on stable; native test runs and
+all other crate builds remain stable. The wasm build invocation in
+`scripts/check-features.sh`, the build pipeline docs, and the
+`gqlmin-size` CI workflow add a `+nightly -Zbuild-std=...` flag.
+
+**Budget reset:** the work nature shifted (stable-only → stable +
+nightly-for-wasm). New defect class: "build-std nightly migration".
+Iteration counter resets to **0/5**. Five attempts available before
+hard-stop on this class.
+
+**Surface conditions for Path β:**
+- Build-std fails on agent's nightly toolchain (rust-src component issue)
+- gz still > 5,120 after `-Z build-std-features=panic_immediate_abort` —
+  surface to user; further rung-2/rung-3 are still available but are
+  this-class attempts not stable-class
+- panic_immediate_abort breaks the wasm smoke test (ABI regression)
+
 ## Round log
 
 > Defect class: "structural fix — bumpalo arena migration" started after R2 surface. Iteration counter reset to 0/5 per playbook (work nature shifted from "build to spec" to "fix structural mismatch").
@@ -294,15 +355,18 @@ defect class).
 | R3 | Option A: bumpalo arena migration (structural fix) | ❌ BLOCKED (Iron Law) | gz=17,490 (Δ=+2,115 vs R2). Vec collapse worked (150→90 fns) but bumpalo's panic paths pulled in core::str fmt + Unicode tables (~3 KB) + bumpalo crate (~1 KB), exceeding the savings. ABI/tests intact. |
 | R4 | Step 7 (napi scaffold) + step 9 partial (5 of 10 ops-only validation rules) + step 10 partial (pretty errors, serde feature scaffold) — parallel with R3 | ✅ DONE | 5 pretty + 12 validation + 1 serde-smoke tests; all feature combos compile; threaded `Document<'src, 'bump>` lifetime via 1 fix-up commit |
 | R5 | Option B: span-indexed Node arena (revert bumpalo + rewrite) | ⚠️ PARTIAL | gz=14,895 (Δ=−480 vs R2; −2,595 vs R3). Function count 150→77 confirms structural collapse. ABI/tests intact. Below R2 baseline but ~9.7 KB over budget. |
+| R6 | Rung 1: Unicode/slice-panic elimination | ⚠️ PARTIAL | gz=10,006 (Δ=−4,889 vs R5). Eliminated Unicode `printable.rs` tables, char-boundary panic strings, slice-bounds messages (verified by wasm-dis). 38+5+12 tests pass; ABI durable. Beat the 3–4 KB estimate by ~1 KB. |
 
 ## Open questions
 
-- R6 measurement-pending: Unicode/slice-panic elimination yield (estimated 3–4 KB).
-- After R6: surface to user with empirical data if combined rungs 1+2+3 projection
-  holds (~8.5 KB ceiling on stable). User then chooses between methodical
-  continuation, Option C (revise budget), or Option F (build-std nightly).
-- Hard-stop awareness: structural-fix defect class will hit 5/5 if R6+R7+R8 don't
-  land. Director recommends preemptive surface after R6 rather than riding to 5/5.
+- R7 measurement-pending: actual gz post-build-std + panic_immediate_abort.
+  If still > 5,120, rungs 2 (wee_alloc) and 3 (custom panic-handler) are
+  still available within the new defect class.
+- Hard-stop awareness: build-std-nightly defect class will hit 5/5 if
+  R7+R8+R9+R10+R11 don't land. Keep budget for verification rounds.
+- Future: do we want a stable-toolchain alternative artifact alongside
+  the nightly build, or is wasm-only-on-nightly acceptable? (Path δ
+  decision deferred until budget is met.)
 
 ## Latest director-note
 
