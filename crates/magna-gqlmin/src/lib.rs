@@ -43,6 +43,16 @@ mod pretty;
 mod validate;
 #[cfg(feature = "validate")]
 pub use validate::{validate_operations, ValidationError};
+#[cfg(all(feature = "sdl", feature = "validate"))]
+pub use validate::validate;
+
+#[cfg(feature = "sdl")]
+pub use parse::sdl::{
+    parse_schema, Description, DirectiveApp, DirectiveArg, DirectiveDef, DirectiveLocation,
+    EnumTypeDef, EnumValueDef, FieldDef, InputObjectTypeDef, InputValueDef, InterfaceTypeDef,
+    ObjectTypeDef, OperationTypeDef, ScalarTypeDef, SchemaDef, SchemaDocument, TypeSystemDefinition,
+    UnionTypeDef,
+};
 
 #[cfg(feature = "napi")]
 mod napi;

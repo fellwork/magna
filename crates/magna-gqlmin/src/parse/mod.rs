@@ -36,6 +36,9 @@ use alloc::vec::Vec;
 use crate::error::{ParseError, ParseErrorKind};
 use crate::lex::{Lexer, Span, Token, TokenKind};
 
+#[cfg(feature = "sdl")]
+pub mod sdl;
+
 // --- Span-indexed shared arena ------------------------------------------
 
 /// Index range into [`Document::nodes`]. The element type at the range
