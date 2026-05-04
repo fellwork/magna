@@ -43,6 +43,7 @@ use crate::lex::{Lexer, Span, Token, TokenKind};
 /// `OperationDefinition::directives` always points at `Node::Directive`
 /// elements).
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct NodeRange {
     pub start: u32,
@@ -66,15 +67,17 @@ impl NodeRange {
 /// Tagged element of the unified node arena. One `Vec<Node>` per
 /// document; every list field on the AST is a `NodeRange` slice into it.
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind"))]
 #[derive(Clone, PartialEq)]
 pub enum Node<'src> {
-    Definition(Definition<'src>),
-    VariableDefinition(VariableDefinition<'src>),
-    Directive(Directive<'src>),
-    Argument(Argument<'src>),
-    Selection(Selection<'src>),
-    ObjectField(ObjectField<'src>),
-    Value(Value<'src>),
+    Definition(#[cfg_attr(feature = "serde", serde(borrow))] Definition<'src>),
+    VariableDefinition(#[cfg_attr(feature = "serde", serde(borrow))] VariableDefinition<'src>),
+    Directive(#[cfg_attr(feature = "serde", serde(borrow))] Directive<'src>),
+    Argument(#[cfg_attr(feature = "serde", serde(borrow))] Argument<'src>),
+    Selection(#[cfg_attr(feature = "serde", serde(borrow))] Selection<'src>),
+    ObjectField(#[cfg_attr(feature = "serde", serde(borrow))] ObjectField<'src>),
+    Value(#[cfg_attr(feature = "serde", serde(borrow))] Value<'src>),
 }
 
 // --- AST ----------------------------------------------------------------
@@ -86,22 +89,36 @@ pub enum Node<'src> {
 /// methods on `Document` (e.g. [`Document::definitions`],
 /// [`Document::selections`]) to read them.
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct Document<'src> {
     /// Range over `Node::Definition` elements in `nodes`. Use
     /// [`Document::definitions`] for typed access.
     pub definitions_range: NodeRange,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub nodes: Vec<Node<'src>>,
 }
 
+// Serde derives on the AST (added R10, step 10 completion).
+//
+// Lifetime model: borrowed-data via `serde(borrow)` on every `&'src str`
+// or transitively-borrowing field. Sum types use `serde(tag = "kind")`
+// for stable, self-describing JSON output. The shape is NOT a
+// graphql-js-compatible AST — it's a direct projection of the Rust
+// AST. Future rounds may align field names with `graphql-js` if a
+// downstream consumer needs that.
+
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind"))]
 #[derive(Clone, PartialEq)]
 pub enum Definition<'src> {
-    Operation(OperationDefinition<'src>),
-    Fragment(FragmentDefinition<'src>),
+    Operation(#[cfg_attr(feature = "serde", serde(borrow))] OperationDefinition<'src>),
+    Fragment(#[cfg_attr(feature = "serde", serde(borrow))] FragmentDefinition<'src>),
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum OperationKind {
     Query,
@@ -110,9 +127,11 @@ pub enum OperationKind {
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct OperationDefinition<'src> {
     pub kind: OperationKind,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Option<Name<'src>>,
     pub variable_definitions: NodeRange,
     pub directives: NodeRange,
@@ -123,9 +142,12 @@ pub struct OperationDefinition<'src> {
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct FragmentDefinition<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub type_condition: NamedType<'src>,
     pub directives: NodeRange,
     pub selection_set: SelectionSet,
@@ -133,42 +155,56 @@ pub struct FragmentDefinition<'src> {
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Name<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub value: &'src str,
     pub span: Span,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct NamedType<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct VariableDefinition<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub var_type: Type<'src>,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub default_value: Option<Value<'src>>,
     pub directives: NodeRange,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct Directive<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
     pub arguments: NodeRange,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct Argument<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub value: Value<'src>,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SelectionSet {
     pub selections: NodeRange,
@@ -176,17 +212,22 @@ pub struct SelectionSet {
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind"))]
 #[derive(Clone, PartialEq)]
 pub enum Selection<'src> {
-    Field(Field<'src>),
-    FragmentSpread(FragmentSpread<'src>),
-    InlineFragment(InlineFragment<'src>),
+    Field(#[cfg_attr(feature = "serde", serde(borrow))] Field<'src>),
+    FragmentSpread(#[cfg_attr(feature = "serde", serde(borrow))] FragmentSpread<'src>),
+    InlineFragment(#[cfg_attr(feature = "serde", serde(borrow))] InlineFragment<'src>),
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct Field<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub alias: Option<Name<'src>>,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
     pub arguments: NodeRange,
     pub directives: NodeRange,
@@ -194,42 +235,54 @@ pub struct Field<'src> {
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct FragmentSpread<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
     pub directives: NodeRange,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct InlineFragment<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub type_condition: Option<NamedType<'src>>,
     pub directives: NodeRange,
     pub selection_set: SelectionSet,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind"))]
 #[derive(Clone, PartialEq)]
 pub enum Type<'src> {
-    Named(NamedType<'src>),
+    // `serde(borrow)` only on the Named variant — `Box<Type>` carries the
+    // recursive lifetime through Box's Serialize impl on its own and
+    // double-tagging the borrow propagation here trips the trait solver
+    // into an explosive recursion under `serde_json::Serializer`.
+    Named(#[cfg_attr(feature = "serde", serde(borrow))] NamedType<'src>),
     List(Box<Type<'src>>),
     NonNull(Box<Type<'src>>),
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "kind"))]
 #[derive(Clone, PartialEq)]
 pub enum Value<'src> {
-    Variable(Name<'src>),
+    Variable(#[cfg_attr(feature = "serde", serde(borrow))] Name<'src>),
     /// Unparsed integer lexeme (e.g. `"-42"`). Caller decodes.
-    Int(&'src str),
+    Int(#[cfg_attr(feature = "serde", serde(borrow))] &'src str),
     /// Unparsed float lexeme. Caller decodes.
-    Float(&'src str),
+    Float(#[cfg_attr(feature = "serde", serde(borrow))] &'src str),
     /// String literal — `raw` is the raw source slice including the quotes
     /// (regular or block). Caller decodes / unescapes if needed.
-    String(StringValue<'src>),
+    String(#[cfg_attr(feature = "serde", serde(borrow))] StringValue<'src>),
     Boolean(bool),
     Null,
-    Enum(Name<'src>),
+    Enum(#[cfg_attr(feature = "serde", serde(borrow))] Name<'src>),
     /// Range over `Node::Value` elements in `Document::nodes`.
     List(NodeRange),
     /// Range over `Node::ObjectField` elements in `Document::nodes`.
@@ -237,17 +290,22 @@ pub enum Value<'src> {
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct StringValue<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub raw: &'src str,
     pub block: bool,
     pub span: Span,
 }
 
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, PartialEq)]
 pub struct ObjectField<'src> {
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub name: Name<'src>,
+    #[cfg_attr(feature = "serde", serde(borrow))]
     pub value: Value<'src>,
 }
 

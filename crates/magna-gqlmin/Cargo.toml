@@ -69,3 +69,8 @@ napi-derive = { version = "2", optional = true }
 serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
+# Used by tests/serde_smoke.rs to exercise the AST `Serialize`/`Deserialize`
+# derives added in R10. Already declared as an optional runtime dep above
+# (for the napi binding); the dev-dep entry just makes it usable from
+# integration tests without requiring the `napi` feature.
+serde_json = { version = "1" }

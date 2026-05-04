@@ -12,6 +12,7 @@ use crate::error::{ParseError, ParseErrorKind};
 /// Byte-offset span into the source. `u32` is enough for any sane source
 /// (4 GiB) and keeps `Token` 16 bytes.
 #[cfg_attr(any(feature = "std", test), derive(Debug))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub struct Span {
     pub start: u32,
