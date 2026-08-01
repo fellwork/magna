@@ -37,6 +37,14 @@ pub fn gather(
     // 1. Resolve which namespaces match the configured schemas.
     let schema_oids = resolve_schema_oids(introspection, &preset.pg_schemas);
 
+    // Schema oid → name, so the exposure policy can be evaluated against a
+    // qualified `schema.relation` name rather than an opaque oid.
+    let schema_names: HashMap<u32, &str> = introspection
+        .namespaces
+        .iter()
+        .map(|ns| (ns.oid, ns.name.as_str()))
+        .collect();
+
     // 2. Build (obj_oid, obj_sub_id) → description text lookup.
     let desc_map = build_description_map(&introspection.descriptions);
 
@@ -51,6 +59,23 @@ pub fn gather(
 
         // Only expose classes in the configured schemas.
         if !schema_oids.contains(&class.schema_oid) {
+            continue;
+        }
+
+        // THE gate on the auto-generated surface. Everything downstream —
+        // object types, query fields, mutations, and the relation fields that
+        // other types would carry — is derived from `resources`, so a relation
+        // dropped here is unreachable rather than merely unqueryable at the
+        // root. `build_relations` below is already tolerant of a dangling FK
+        // target (it looks the endpoint up in `resources` and skips when
+        // absent), so filtering one side of a foreign key drops the relation
+        // field instead of producing a reference to a type that was never
+        // registered.
+        let schema_name = schema_names
+            .get(&class.schema_oid)
+            .copied()
+            .unwrap_or_default();
+        if !preset.exposure.allows(schema_name, &class.name) {
             continue;
         }
 
@@ -542,6 +567,13 @@ mod tests {
         Preset::default()
     }
 
+    fn preset_with(exposure: magna_config::Exposure) -> Preset {
+        Preset {
+            exposure,
+            ..Preset::default()
+        }
+    }
+
     fn make_registry(introspection: &IntrospectionResult) -> PgResourceRegistry {
         PgResourceRegistry::from_introspection(introspection)
     }
@@ -724,5 +756,100 @@ mod tests {
         assert_eq!(resolved.name, "Status", "statuses → Status (singularized + PascalCase)");
         assert_eq!(resolved.pg_type_oid, 500);
         assert_eq!(resolved.values, vec!["active", "inactive"], "values sorted by sort_order");
+    }
+
+    // ------------------------------------------------------------------
+    // Exposure — the gate on the auto-generated surface
+    // ------------------------------------------------------------------
+    //
+    // `gather` is the ONE place exposure is evaluated, so these tests are the
+    // real assertion that a filtered relation is unreachable. Everything
+    // downstream (object types, query fields, mutations, relation fields)
+    // derives from `GatherOutput::resources`.
+
+    #[test]
+    fn exposure_all_is_the_unfiltered_baseline() {
+        let intro = make_introspection();
+        let registry = make_registry(&intro);
+
+        let output = gather(&intro, &registry, &preset_with(magna_config::Exposure::All))
+            .expect("gather failed");
+
+        assert_eq!(output.resources.len(), 2);
+        assert_eq!(output.relations.len(), 1, "the posts→users FK survives");
+    }
+
+    #[test]
+    fn exposure_only_narrows_resources_to_the_named_relation() {
+        let intro = make_introspection();
+        let registry = make_registry(&intro);
+        let preset = preset_with(magna_config::Exposure::Only(vec![
+            "public.users".to_string()
+        ]));
+
+        let output = gather(&intro, &registry, &preset).expect("gather failed");
+
+        let names: Vec<&str> = output.resources.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, vec!["User"], "only the allowlisted relation is built");
+        assert!(
+            !output.behaviors.contains_key("Post"),
+            "a filtered relation must not carry behaviors (it has no fields to act on)",
+        );
+    }
+
+    #[test]
+    fn exposure_only_drops_relations_whose_endpoint_was_filtered() {
+        let intro = make_introspection();
+        let registry = make_registry(&intro);
+        // `posts` is filtered out; the posts→users FK has nowhere to hang.
+        let preset = preset_with(magna_config::Exposure::Only(vec![
+            "public.users".to_string()
+        ]));
+
+        let output = gather(&intro, &registry, &preset).expect("gather failed");
+
+        assert!(
+            output.relations.is_empty(),
+            "a relation with a filtered endpoint must be dropped, not left \
+             pointing at a type that never gets registered; got {:?}",
+            output.relations.iter().map(|r| &r.name).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn exposure_extensions_only_generates_an_empty_surface() {
+        let intro = make_introspection();
+        let registry = make_registry(&intro);
+
+        let output = gather(
+            &intro,
+            &registry,
+            &preset_with(magna_config::Exposure::ExtensionsOnly),
+        )
+        .expect("gather failed");
+
+        // The embedding mode: magna is a planner, not a gateway. Nothing is
+        // reachable except what an extension registers by hand.
+        assert!(output.resources.is_empty(), "no auto-generated resources");
+        assert!(output.relations.is_empty(), "no auto-generated relations");
+        assert!(output.behaviors.is_empty(), "no auto-generated behaviors");
+    }
+
+    #[test]
+    fn exposure_is_evaluated_per_schema_not_per_bare_name() {
+        // Guards the qualification: an allowlist entry naming another schema
+        // must not admit a same-named relation in `public`.
+        let intro = make_introspection();
+        let registry = make_registry(&intro);
+        let preset = preset_with(magna_config::Exposure::Only(vec![
+            "usr.users".to_string()
+        ]));
+
+        let output = gather(&intro, &registry, &preset).expect("gather failed");
+
+        assert!(
+            output.resources.is_empty(),
+            "public.users must not be admitted by an allowlist naming usr.users",
+        );
     }
 }

@@ -112,6 +112,61 @@ impl Default for SchemaBuildOptions {
     }
 }
 
+/// Which introspected relations become **auto-generated** GraphQL fields.
+///
+/// This narrows the auto-generated surface only. Fields registered by a
+/// `SchemaExtension` are unaffected by every variant here, including
+/// [`Exposure::ExtensionsOnly`] — an extension field is hand-written, so it is
+/// never something the engine decided to expose on your behalf.
+///
+/// Exposure is evaluated once, in the gather phase, against the qualified
+/// `schema.relation` name. A relation filtered out gets no object type, no
+/// query field, and no relation field pointing at it from anywhere else,
+/// because every downstream pass reads the same filtered resource list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Exposure {
+    /// Every table and view in [`Preset::pg_schemas`]. The default, and what
+    /// makes magna a Postgres gateway.
+    All,
+
+    /// Only the named relations, each written `schema.relation`
+    /// (e.g. `"public.author"`).
+    ///
+    /// Matched exactly — no globbing, no case folding. A typo therefore hides
+    /// a relation rather than silently widening the surface, which is the
+    /// direction a mistake should fail in.
+    Only(Vec<String>),
+
+    /// No auto-generated fields at all. The schema contains exactly what
+    /// extensions register.
+    ///
+    /// This is the mode for **embedding magna as a planning and execution
+    /// engine** rather than running it as a Postgres gateway: two-phase
+    /// planning, fingerprint deduplication, and batched `PgSelectStep` all
+    /// still work for extension-registered fields, but no relation is
+    /// reachable by default.
+    ///
+    /// Use this when authorization lives in your application rather than in
+    /// Postgres RLS — e.g. a service-role pool with redaction in Rust. In that
+    /// setup `Exposure::All` would publish every table in `pg_schemas` with no
+    /// row-level protection behind it.
+    ExtensionsOnly,
+}
+
+impl Exposure {
+    /// Is `schema.relation` part of the auto-generated surface?
+    pub fn allows(&self, schema: &str, relation: &str) -> bool {
+        match self {
+            Exposure::All => true,
+            Exposure::ExtensionsOnly => false,
+            Exposure::Only(names) => names.iter().any(|n| {
+                n.split_once('.')
+                    .is_some_and(|(s, r)| s == schema && r == relation)
+            }),
+        }
+    }
+}
+
 /// The single configuration object passed to all magna components.
 ///
 /// Presets are composable — start from [`Preset::default()`] (Supabase
@@ -120,6 +175,12 @@ impl Default for SchemaBuildOptions {
 pub struct Preset {
     /// Postgres schemas to expose in the GraphQL API.
     pub pg_schemas: Vec<String>,
+
+    /// Which relations *within* [`Preset::pg_schemas`] are auto-generated.
+    ///
+    /// `pg_schemas` is a coarse gate (whole schemas); this is the fine one.
+    /// Defaults to [`Exposure::All`] — every relation in the listed schemas.
+    pub exposure: Exposure,
 
     /// The default Postgres role for unauthenticated requests.
     pub default_role: Option<String>,
@@ -151,14 +212,23 @@ pub struct Preset {
 impl Default for Preset {
     /// Sensible defaults for a Supabase-backed deployment:
     /// - Schema: `["public"]`
+    /// - Exposure: every relation in those schemas ([`Exposure::All`])
     /// - Default role: `"anon"`
     /// - JWT secret read from `JWT_SECRET` env var
     /// - Subscriptions enabled
     /// - All CRUD mutations enabled
     /// - Relay support enabled
+    ///
+    /// `Exposure::All` is the gateway default: it is what makes "point magna
+    /// at a database and get an API" true. It assumes Postgres is enforcing
+    /// authorization — RLS policies plus the per-request role that
+    /// `magna-serv` sets. **An embedder that connects with a privileged role
+    /// and authorizes in application code must not keep this default**; see
+    /// [`Exposure::ExtensionsOnly`].
     fn default() -> Self {
         Self {
             pg_schemas: vec!["public".to_string()],
+            exposure: Exposure::All,
             default_role: Some("anon".to_string()),
             jwt: JwtConfig::default(),
             pool: PoolConfig::default(),
@@ -177,6 +247,7 @@ impl std::fmt::Debug for Preset {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Preset")
             .field("pg_schemas", &self.pg_schemas)
+            .field("exposure", &self.exposure)
             .field("default_role", &self.default_role)
             .field("jwt", &self.jwt)
             .field("pool", &self.pool)
@@ -268,5 +339,71 @@ mod tests {
         assert!(opts.relay);
         assert!(opts.connections);
         assert!(!opts.simple_lists);
+    }
+
+    // ── Exposure ────────────────────────────────────────────────────────
+    // Every negative case below is a case where a *wrong* answer publishes a
+    // relation the operator did not name. They are written as the security
+    // property, not as coverage.
+
+    #[test]
+    fn default_exposure_is_all() {
+        // The gateway default. Changing it is a product decision, not a
+        // refactor — this test exists so the change is deliberate.
+        assert_eq!(Preset::default().exposure, Exposure::All);
+    }
+
+    #[test]
+    fn exposure_all_admits_every_relation() {
+        assert!(Exposure::All.allows("public", "users"));
+        assert!(Exposure::All.allows("usr", "notes"));
+    }
+
+    #[test]
+    fn exposure_extensions_only_admits_nothing() {
+        assert!(!Exposure::ExtensionsOnly.allows("public", "users"));
+        assert!(!Exposure::ExtensionsOnly.allows("usr", "notes"));
+    }
+
+    #[test]
+    fn exposure_only_requires_the_schema_to_match_too() {
+        let e = Exposure::Only(vec!["public.users".to_string()]);
+        assert!(e.allows("public", "users"));
+        // The SAME relation name in another schema is a different relation.
+        // Matching on the bare name here would expose `usr.users` because
+        // someone allowlisted `public.users`.
+        assert!(!e.allows("usr", "users"));
+        assert!(!e.allows("public", "posts"));
+    }
+
+    #[test]
+    fn exposure_only_does_not_glob() {
+        // `*` is an ordinary character, not a wildcard. Someone reaching for
+        // shell globbing must get nothing rather than everything.
+        let e = Exposure::Only(vec!["public.*".to_string()]);
+        assert!(!e.allows("public", "users"));
+    }
+
+    #[test]
+    fn exposure_only_does_not_case_fold() {
+        // Postgres identifiers are case-sensitive once quoted; folding here
+        // would admit a relation the operator did not name.
+        let e = Exposure::Only(vec!["public.Users".to_string()]);
+        assert!(!e.allows("public", "users"));
+        assert!(!e.allows("public", "USERS"));
+    }
+
+    #[test]
+    fn exposure_only_ignores_unqualified_entries() {
+        // A half-written rule names no schema. It must hide a relation, never
+        // expose one.
+        let e = Exposure::Only(vec!["users".to_string()]);
+        assert!(!e.allows("public", "users"));
+        assert!(!e.allows("", "users"));
+    }
+
+    #[test]
+    fn exposure_only_with_an_empty_list_admits_nothing() {
+        assert!(!Exposure::Only(vec![]).allows("public", "users"));
     }
 }

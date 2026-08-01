@@ -18,5 +18,5 @@ pub mod resolve;
 
 // Re-export primary public API.
 pub use plugin::{GatherContext, Plugin, SchemaContext};
-pub use preset::{JwtConfig, PoolConfig, Preset, SchemaBuildOptions};
+pub use preset::{Exposure, JwtConfig, PoolConfig, Preset, SchemaBuildOptions};
 pub use resolve::{merge, validate, PresetOverride, ResolveError};

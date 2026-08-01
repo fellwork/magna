@@ -6,7 +6,7 @@
 //! overrides on top.
 
 use crate::plugin::Plugin;
-use crate::preset::{PoolConfig, Preset, SchemaBuildOptions};
+use crate::preset::{Exposure, PoolConfig, Preset, SchemaBuildOptions};
 
 /// Errors that can occur during preset validation.
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +32,7 @@ pub enum ResolveError {
 #[derive(Default)]
 pub struct PresetOverride {
     pub pg_schemas: Option<Vec<String>>,
+    pub exposure: Option<Exposure>,
     pub default_role: Option<Option<String>>,
     pub jwt_secret: Option<String>,
     pub jwks_url: Option<Option<String>>,
@@ -47,6 +48,7 @@ impl std::fmt::Debug for PresetOverride {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PresetOverride")
             .field("pg_schemas", &self.pg_schemas)
+            .field("exposure", &self.exposure)
             .field("default_role", &self.default_role)
             .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "***"))
             .field("jwks_url", &self.jwks_url)
@@ -85,6 +87,9 @@ pub fn merge(mut base: Preset, overrides: &mut [PresetOverride]) -> Preset {
     for ov in overrides.iter_mut() {
         if let Some(schemas) = ov.pg_schemas.take() {
             base.pg_schemas = schemas;
+        }
+        if let Some(exposure) = ov.exposure.take() {
+            base.exposure = exposure;
         }
         if let Some(role) = ov.default_role.take() {
             base.default_role = role;
@@ -159,6 +164,42 @@ mod tests {
         }];
         let merged = merge(base, &mut overrides);
         assert_eq!(merged.pg_schemas, vec!["public", "app"]);
+    }
+
+    #[test]
+    fn merge_overrides_exposure() {
+        let base = Preset::default();
+        assert_eq!(base.exposure, Exposure::All, "baseline");
+        let mut overrides = vec![PresetOverride {
+            exposure: Some(Exposure::ExtensionsOnly),
+            ..Default::default()
+        }];
+        let merged = merge(base, &mut overrides);
+        assert_eq!(merged.exposure, Exposure::ExtensionsOnly);
+    }
+
+    #[test]
+    fn merge_does_not_widen_exposure_when_a_later_override_is_silent() {
+        // An override that says nothing about exposure must LEAVE the narrower
+        // setting alone. If a silent override reset it to the `All` default,
+        // layering an unrelated preset on top would republish every relation.
+        let base = Preset::default();
+        let mut overrides = vec![
+            PresetOverride {
+                exposure: Some(Exposure::Only(vec!["public.users".into()])),
+                ..Default::default()
+            },
+            PresetOverride {
+                pg_schemas: Some(vec!["public".into()]),
+                ..Default::default()
+            },
+        ];
+        let merged = merge(base, &mut overrides);
+        assert_eq!(
+            merged.exposure,
+            Exposure::Only(vec!["public.users".into()]),
+            "a silent override must not widen the surface",
+        );
     }
 
     #[test]
