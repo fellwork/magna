@@ -8,7 +8,7 @@
 use crate::fingerprint::StepFingerprint;
 use crate::planner::ExecutionPlan;
 use magna_types::StepId;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Result of the optimization pass: an ordered list of step IDs
 /// to execute, plus the (possibly reduced) plan.
@@ -152,38 +152,50 @@ fn rebuild_edges_after_remap(plan: &mut ExecutionPlan, remap: &HashMap<StepId, S
 /// unary steps to the earliest position in the topological order that
 /// respects their dependencies.
 fn hoist_unary_steps(plan: &ExecutionPlan, order: &mut Vec<StepId>) {
-    // Partition into unary and non-unary, preserving relative order
-    let mut unary_ids: Vec<StepId> = Vec::new();
-    let mut non_unary_ids: Vec<StepId> = Vec::new();
+    // Hoist unary steps toward the front so their single value is available
+    // as early as possible — but NEVER past a step they depend on.
+    //
+    // The naive version of this pass partitioned into unary/non-unary and
+    // concatenated. That is only sound under the assumption a unary step
+    // never depends on a non-unary one, which the old comment asserted and
+    // nothing enforced. It is also false in practice: a document assembler
+    // is unary (one document) and legitimately depends on a batched, and
+    // therefore non-unary, read. Concatenating placed the assembler BEFORE
+    // its input, and the executor then found no output for a dependency
+    // that had not run yet.
+    //
+    // So a step is hoisted only once every dependency it names is already
+    // placed. Walking the incoming topological order and deferring anything
+    // not yet satisfied keeps the result a valid topological order by
+    // construction, while still pulling independent unary steps forward.
+    let mut hoisted: Vec<StepId> = Vec::with_capacity(order.len());
+    let mut deferred: Vec<StepId> = Vec::with_capacity(order.len());
+    let mut placed: HashSet<StepId> = HashSet::new();
 
     for &id in order.iter() {
-        if let Some(step) = plan.steps.get(&id) {
-            if step.is_unary() {
-                unary_ids.push(id);
-            } else {
-                non_unary_ids.push(id);
-            }
+        let Some(step) = plan.steps.get(&id) else {
+            // Not in the plan (removed by dedup) — drop it from the order.
+            continue;
+        };
+
+        let deps_satisfied = plan
+            .dependencies_of(id)
+            .iter()
+            .all(|dep| placed.contains(dep));
+
+        if step.is_unary() && deps_satisfied {
+            placed.insert(id);
+            hoisted.push(id);
+        } else {
+            deferred.push(id);
         }
     }
 
-    // Rebuild: unary first (they have no batch deps), then non-unary.
-    // Both sub-lists are already in valid topological order since we
-    // preserved relative ordering within each partition.
-    //
-    // This is safe because unary steps' dependencies are either:
-    // - Other unary steps (which are also hoisted)
-    // - No dependencies (root steps)
-    // A unary step should never depend on a non-unary step (that would
-    // make it batch-dependent). We verify this at placement time.
-    let mut result = Vec::with_capacity(order.len());
-
-    // Insert unary steps, respecting their internal dependency order
-    result.extend(unary_ids.iter().copied());
-
-    // Insert non-unary steps after all unary steps
-    result.extend(non_unary_ids.iter().copied());
-
-    *order = result;
+    // `deferred` keeps its relative order, which was topologically valid on
+    // the way in; `hoisted` only ever contains steps whose dependencies were
+    // already placed. Concatenating preserves both.
+    hoisted.extend(deferred.iter().copied());
+    *order = hoisted;
 }
 
 #[cfg(test)]
@@ -306,5 +318,79 @@ mod tests {
         let optimized = optimize(plan);
         // One of the duplicates should have been removed
         assert_eq!(optimized.plan.step_count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod dedup_dep_tests {
+    use super::*;
+    use crate::planner::Planner;
+    use crate::step::{ExecutableStep, ExecutionContext, StepInputs, StepOutput};
+    use magna_types::FwGraphError;
+    use std::sync::Arc;
+
+    struct Leaf { id: StepId, key: u64 }
+    #[async_trait::async_trait]
+    impl ExecutableStep for Leaf {
+        fn id(&self) -> StepId { self.id }
+        fn dependencies(&self) -> &[StepId] { &[] }
+        fn is_unary(&self) -> bool { true }
+        fn fingerprint(&self) -> StepFingerprint {
+            StepFingerprint::new(std::any::TypeId::of::<Leaf>(), vec![], self.key)
+        }
+        async fn execute(&self, _c: &ExecutionContext, _i: StepInputs) -> Result<StepOutput, FwGraphError> {
+            Ok(StepOutput::from_values(vec![Arc::new(self.key)]))
+        }
+    }
+    struct Asm { id: StepId, deps: Vec<StepId>, tag: u64 }
+    #[async_trait::async_trait]
+    impl ExecutableStep for Asm {
+        fn id(&self) -> StepId { self.id }
+        fn dependencies(&self) -> &[StepId] { &self.deps }
+        fn is_unary(&self) -> bool { true }
+        fn fingerprint(&self) -> StepFingerprint {
+            StepFingerprint::new(std::any::TypeId::of::<Asm>(), self.deps.clone(), self.tag)
+        }
+        async fn execute(&self, _c: &ExecutionContext, _i: StepInputs) -> Result<StepOutput, FwGraphError> {
+            Ok(StepOutput::from_values(vec![Arc::new(self.tag)]))
+        }
+    }
+
+    #[test]
+    fn remap_points_removed_to_surviving() {
+        let mut p = Planner::new(4);
+        p.register(Arc::new(Leaf { id: 1, key: 5 }));
+        p.register(Arc::new(Asm { id: 2, deps: vec![1], tag: 100 }));
+        p.register(Arc::new(Leaf { id: 3, key: 5 }));
+        p.register(Arc::new(Asm { id: 4, deps: vec![3], tag: 200 }));
+        let opt = optimize(p.build().unwrap());
+
+        eprintln!("remap = {:?}", opt.remap);
+        eprintln!("surviving = {:?}", {
+            let mut v: Vec<_> = opt.plan.step_ids(); v.sort(); v
+        });
+        eprintln!("order = {:?}", opt.execution_order);
+
+        // Every remap TARGET must survive; every remap SOURCE must be gone.
+        for (removed, canonical) in &opt.remap {
+            assert!(opt.plan.get_step(*canonical).is_some(),
+                "remap {removed}->{canonical} but {canonical} was removed");
+            assert!(opt.plan.get_step(*removed).is_none(),
+                "remap {removed}->{canonical} but {removed} still present");
+        }
+        // Every surviving step's deps must resolve to a surviving step.
+        for id in opt.plan.step_ids() {
+            let step = opt.plan.get_step(id).unwrap();
+            for d in step.dependencies() {
+                let c = opt.remap.get(d).copied().unwrap_or(*d);
+                assert!(opt.plan.get_step(c).is_some(),
+                    "step {id} dep {d} -> {c} which does not survive");
+                // …and it must be ordered BEFORE this step.
+                let pos_dep = opt.execution_order.iter().position(|x| *x == c);
+                let pos_self = opt.execution_order.iter().position(|x| *x == id);
+                assert!(pos_dep < pos_self,
+                    "step {id} (pos {pos_self:?}) runs before its dep {c} (pos {pos_dep:?})");
+            }
+        }
     }
 }

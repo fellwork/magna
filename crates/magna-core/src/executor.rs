@@ -41,23 +41,48 @@ impl Executor {
                     continue;
                 };
 
-                // Gather inputs from dependency outputs
-                let dep_ids = step.dependencies();
+                // Gather inputs from dependency outputs.
+                //
+                // A step OWNS its dependency ids, and deduplication does not
+                // rewrite them — it removes the duplicate step and rebuilds
+                // the graph's edges, leaving surviving steps still naming the
+                // id they were built with. So every dependency id must be
+                // resolved through the dedup remap before it is looked up,
+                // or a step whose dependency was deduplicated away finds
+                // nothing.
+                let dep_ids: Vec<StepId> = step
+                    .dependencies()
+                    .iter()
+                    .map(|id| plan.remap.get(id).copied().unwrap_or(*id))
+                    .collect();
 
                 // Check if any dependency has propagating flags that
                 // should skip this step's execution.
-                let should_skip = check_propagating_flags(dep_ids, &outputs, batch_size);
+                let should_skip = check_propagating_flags(&dep_ids, &outputs, batch_size);
 
                 if let Some(skip_output) = should_skip {
                     outputs.insert(step_id, Arc::new(skip_output));
                     continue;
                 }
 
-                // Build inputs for this step
-                let dep_outputs: Vec<Arc<StepOutput>> = dep_ids
-                    .iter()
-                    .filter_map(|id| outputs.get(id).cloned())
-                    .collect();
+                // Build inputs for this step.
+                //
+                // `StepInputs` is POSITIONAL — `dep_outputs[i]` must
+                // correspond to `dependencies()[i]`, and steps downcast by
+                // position. Dropping a missing dependency would silently
+                // shift every later input down one slot and hand a step the
+                // wrong value at the wrong type, so a missing output is a
+                // hard error naming the step and the dependency.
+                let mut dep_outputs: Vec<Arc<StepOutput>> = Vec::with_capacity(dep_ids.len());
+                for id in &dep_ids {
+                    let output = outputs.get(id).cloned().ok_or_else(|| {
+                        FwGraphError::ExecutionError(format!(
+                            "step {step_id} depends on step {id}, which produced no output \
+                             (dependency missing from the plan or executed out of order)"
+                        ))
+                    })?;
+                    dep_outputs.push(output);
+                }
                 let inputs = StepInputs::new(dep_outputs);
 
                 let step = Arc::clone(step);
