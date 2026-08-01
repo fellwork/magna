@@ -217,6 +217,130 @@ async fn variables_resolve_into_plan_arguments() {
     assert_eq!(resp.data.to_string(), r#"{answer: 9}"#);
 }
 
+/// A step that depends on another step, and echoes its dependency's value.
+/// This is the document-assembly shape: leaves fetch, an assembler composes.
+struct EchoDepStep {
+    id: StepId,
+    deps: Vec<StepId>,
+    tag: i64,
+}
+
+#[async_trait]
+impl ExecutableStep for EchoDepStep {
+    fn id(&self) -> StepId {
+        self.id
+    }
+
+    fn dependencies(&self) -> &[StepId] {
+        &self.deps
+    }
+
+    fn is_unary(&self) -> bool {
+        true
+    }
+
+    fn fingerprint(&self) -> StepFingerprint {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.tag.hash(&mut h);
+        StepFingerprint::new(
+            std::any::TypeId::of::<EchoDepStep>(),
+            self.deps.clone(),
+            h.finish(),
+        )
+    }
+
+    async fn execute(
+        &self,
+        _ctx: &ExecutionContext,
+        inputs: StepInputs,
+    ) -> Result<StepOutput, FwGraphError> {
+        // Positional downcast — exactly what a document assembler does, and
+        // what silently breaks if a dependency's output goes missing.
+        let dep = inputs
+            .dep_outputs
+            .first()
+            .ok_or_else(|| FwGraphError::ExecutionError("assembler got no inputs".into()))?;
+        let base = dep.values[0]
+            .downcast_ref::<i64>()
+            .copied()
+            .ok_or_else(|| FwGraphError::ExecutionError("dependency had wrong type".into()))?;
+        Ok(StepOutput::from_values(vec![Arc::new(base + self.tag)]))
+    }
+}
+
+/// Two roots, each registering a leaf (same key ⇒ deduped) plus its own
+/// assembler that depends on that leaf.
+struct AssemblerExtension {
+    executions: Arc<AtomicUsize>,
+}
+
+impl SchemaExtension for AssemblerExtension {
+    fn name(&self) -> &str {
+        "assemblers"
+    }
+
+    fn extend_query(&self, ctx: &mut ExtensionContext<'_>) {
+        for (field, tag) in [("left", 100i64), ("right", 200i64)] {
+            ctx.query_field(Field::new(
+                field,
+                TypeRef::named_nn(TypeRef::INT),
+                planned_resolver(field),
+            ));
+
+            let executions = Arc::clone(&self.executions);
+            ctx.plan_field("Query", field, move |scope, _args| {
+                // Identical leaf in both roots ⇒ the SECOND one is
+                // deduplicated away, and its assembler's dependency id
+                // becomes stale.
+                let leaf = scope.register(Arc::new(ConstStep {
+                    id: scope.next_step_id(),
+                    base: 5,
+                    executions: Arc::clone(&executions),
+                }))?;
+                scope.register(Arc::new(EchoDepStep {
+                    id: scope.next_step_id(),
+                    deps: vec![leaf],
+                    tag,
+                }))
+            });
+        }
+    }
+}
+
+/// Regression: an assembly step whose dependency was deduplicated away must
+/// still receive that dependency's output.
+///
+/// Dedup removes the duplicate leaf and rebuilds graph edges, but a surviving
+/// step still NAMES the id it was constructed with. The executor therefore
+/// has to resolve dependency ids through the remap before looking them up —
+/// and must treat a genuinely missing output as an error rather than
+/// dropping it, because `StepInputs` is positional and a silent drop shifts
+/// every later input into the wrong slot.
+#[tokio::test]
+async fn an_assembler_whose_dependency_was_deduped_still_gets_its_input() {
+    let executions = Arc::new(AtomicUsize::new(0));
+    let gather = empty_gather();
+    let schema = build_schema(
+        &gather,
+        &gather.behaviors,
+        lazy_pool(),
+        &[Box::new(AssemblerExtension {
+            executions: Arc::clone(&executions),
+        })],
+    )
+    .expect("schema build");
+
+    let resp = schema.execute("{ left right }").await;
+    assert!(resp.errors.is_empty(), "unexpected errors: {:?}", resp.errors);
+    // Both assemblers saw the shared leaf's value (5), and added their tags.
+    assert_eq!(resp.data.to_string(), r#"{left: 105, right: 205}"#);
+    assert_eq!(
+        executions.load(Ordering::SeqCst),
+        1,
+        "the shared leaf must execute once",
+    );
+}
+
 #[tokio::test]
 async fn unplanned_operations_pay_nothing() {
     // A query that touches no planned field must not fail and must not
