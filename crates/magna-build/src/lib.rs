@@ -3,6 +3,7 @@ pub(crate) mod executor;
 pub mod gather;
 pub mod ir;
 pub mod naming;
+pub mod plan_extension;
 pub mod plan_resolver;
 pub mod register;
 pub mod resolve;
@@ -16,6 +17,9 @@ pub use gather::gather;
 pub use ir::{
     BehaviorSet, GatherOutput, ResolvedColumn, ResolvedEnum, ResolvedRelation, ResolvedResource,
     ResourceKind,
+};
+pub use plan_extension::{
+    FieldArgs, PlanExtensionFactory, PlanFn, PlanRegistry, PlanResults, PlanScope,
 };
 pub use plan_resolver::PlanContext;
 pub use union_step::{PgUnionStep, TaggedRow};
@@ -218,12 +222,17 @@ pub fn build_schema(
     // 11. Register condition types for all resources
     builder = register_condition_types(builder, &output.resources);
 
+    // Plan-fn registry — populated by extensions via `plan_field` during any
+    // phase; if non-empty after all phases, the plan extension is attached.
+    let mut plan_registry = plan_extension::PlanRegistry::default();
+
     // 11b. Let extensions register custom types BEFORE query/mutation field construction
     //      so extensions can reference auto-generated types in their field signatures.
     builder = extension::run_extension_phase(
         builder,
         &mut query,
         None,
+        &mut plan_registry,
         extensions,
         extension::Phase::RegisterTypes,
     );
@@ -244,6 +253,7 @@ pub fn build_schema(
         builder,
         &mut query,
         None,
+        &mut plan_registry,
         extensions,
         extension::Phase::ExtendQuery,
     );
@@ -281,6 +291,7 @@ pub fn build_schema(
             builder,
             &mut query,
             Some(&mut mutation),
+            &mut plan_registry,
             extensions,
             extension::Phase::ExtendMutation,
         );
@@ -306,6 +317,14 @@ pub fn build_schema(
 
     // 17. Apply limits and finish
     builder = builder.limit_complexity(200).limit_depth(10);
+
+    // Attach plan-based execution only when an extension registered at least
+    // one plan fn — unplanned schemas pay zero per-request overhead.
+    if !plan_registry.is_empty() {
+        builder = builder.extension(plan_extension::PlanExtensionFactory::new(Arc::new(
+            plan_registry,
+        )));
+    }
 
     builder
         .finish()

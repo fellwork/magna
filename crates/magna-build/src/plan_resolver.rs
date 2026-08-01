@@ -19,6 +19,10 @@ use magna_types::{FwGraphError, StepId};
 pub struct PlanContext {
     planner: Mutex<Option<Planner>>,
     results: OnceLock<HashMap<StepId, Arc<StepOutput>>>,
+    /// The optimizer's dedup remap (removed id → canonical id), retained so
+    /// a caller that registered a step which was then deduplicated away can
+    /// still read its result — via the canonical step that absorbed it.
+    remap: OnceLock<HashMap<StepId, StepId>>,
     exec_ctx: Arc<ExecutionContext>,
     #[allow(dead_code)]
     batch_size: usize,
@@ -30,6 +34,7 @@ impl PlanContext {
         Self {
             planner: Mutex::new(Some(Planner::new(batch_size))),
             results: OnceLock::new(),
+            remap: OnceLock::new(),
             exec_ctx,
             batch_size,
         }
@@ -74,6 +79,11 @@ impl PlanContext {
         let optimized = optimize(plan);
         let outputs = Executor::execute(&optimized, Arc::clone(&self.exec_ctx)).await?;
 
+        // Retain the dedup remap BEFORE storing results: a registered step
+        // that was deduplicated away no longer appears in `outputs`, and
+        // `get_result` must forward its id to the canonical step.
+        let _ = self.remap.set(optimized.remap);
+
         // Store results — OnceLock guarantees this only happens once.
         self.results.set(outputs).map_err(|_| {
             FwGraphError::ExecutionError("results already set (internal error)".to_string())
@@ -84,9 +94,18 @@ impl PlanContext {
 
     /// Retrieve the output for a specific step after `execute()` completes.
     ///
+    /// The id may be one the caller registered that was then deduplicated
+    /// away by the optimizer — it is forwarded to the canonical step that
+    /// absorbed it (equal fingerprints ⇒ identical output, by contract).
+    ///
     /// Returns `None` if `execute()` has not been called yet, or if the step ID is unknown.
     pub fn get_result(&self, step_id: StepId) -> Option<Arc<StepOutput>> {
-        self.results.get()?.get(&step_id).cloned()
+        let canonical = self
+            .remap
+            .get()
+            .and_then(|m| m.get(&step_id).copied())
+            .unwrap_or(step_id);
+        self.results.get()?.get(&canonical).cloned()
     }
 
     /// Returns `true` if `execute()` has been called and completed successfully.

@@ -19,6 +19,16 @@ pub struct OptimizedPlan {
     /// Step IDs in topological execution order. Steps earlier in this
     /// list have no unresolved dependencies when it is their turn.
     pub execution_order: Vec<StepId>,
+
+    /// Deduplication remap: removed step id → the canonical step that
+    /// absorbed it. A caller holding the id of a step it registered must
+    /// follow this map when reading results — the registered step may no
+    /// longer exist in the plan, but its output is the canonical step's
+    /// output by construction (equal fingerprints ⇒ identical results).
+    /// Values are always canonical (never themselves remapped): dedup
+    /// processes in topological order and a fingerprint's first occurrence
+    /// stays canonical for the whole pass.
+    pub remap: HashMap<StepId, StepId>,
 }
 
 /// Run all optimization passes on an ExecutionPlan.
@@ -33,7 +43,7 @@ pub fn optimize(mut plan: ExecutionPlan) -> OptimizedPlan {
     let order = topological_sort(&plan);
 
     // Deduplicate steps with matching fingerprints
-    deduplicate(&mut plan, &order);
+    let remap = deduplicate(&mut plan, &order);
 
     // Re-sort after dedup since the graph may have changed
     let mut execution_order = topological_sort(&plan);
@@ -44,6 +54,7 @@ pub fn optimize(mut plan: ExecutionPlan) -> OptimizedPlan {
     OptimizedPlan {
         plan,
         execution_order,
+        remap,
     }
 }
 
@@ -58,11 +69,13 @@ pub fn topological_sort(plan: &ExecutionPlan) -> Vec<StepId> {
     sorted.iter().map(|&idx| plan.graph[idx]).collect()
 }
 
-/// Deduplicate steps with identical fingerprints.
+/// Deduplicate steps with identical fingerprints. Returns the remap of
+/// removed step id → canonical step id, so result lookups for a deduped
+/// step can be forwarded to the step that absorbed it.
 ///
 /// Processes steps in topological order so that dependency IDs are
 /// already remapped by the time we compute a step's fingerprint.
-fn deduplicate(plan: &mut ExecutionPlan, topo_order: &[StepId]) {
+fn deduplicate(plan: &mut ExecutionPlan, topo_order: &[StepId]) -> HashMap<StepId, StepId> {
     let mut seen: HashMap<StepFingerprint, StepId> = HashMap::new();
     let mut remap: HashMap<StepId, StepId> = HashMap::new();
     let mut to_remove: Vec<StepId> = Vec::new();
@@ -107,6 +120,8 @@ fn deduplicate(plan: &mut ExecutionPlan, topo_order: &[StepId]) {
     if !remap.is_empty() {
         rebuild_edges_after_remap(plan, &remap);
     }
+
+    remap
 }
 
 /// After deduplication, rebuild the graph edges so that steps which

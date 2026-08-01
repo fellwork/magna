@@ -69,6 +69,20 @@ pub struct PgSelectStep {
     /// These are closures that transform the SqlBuilder just before build().
     tweaks: Vec<SqlTweak>,
 
+    /// Hashes of the keys supplied via [`apply_keyed`](Self::apply_keyed), in
+    /// registration order. These participate in the fingerprint so that two
+    /// steps whose tweaks were built from the same argument values dedupe,
+    /// while steps tweaked with different arguments never collide.
+    tweak_keys: Vec<u64>,
+
+    /// True once any *unkeyed* tweak has been registered via
+    /// [`apply`](Self::apply). An unkeyed tweak's semantics are invisible to
+    /// the fingerprint (it is an opaque closure), so the only sound treatment
+    /// is to make this step's fingerprint unique — it must never dedupe with
+    /// anything, or one field's WHERE/ORDER/LIMIT would silently serve
+    /// another field's rows.
+    has_unkeyed_tweak: bool,
+
     deps: Vec<StepId>,
 }
 
@@ -91,6 +105,8 @@ impl PgSelectStep {
             fk_col: None,
             parent_pk_col: "id".to_string(),
             tweaks: Vec::new(),
+            tweak_keys: Vec::new(),
+            has_unkeyed_tweak: false,
             deps: Vec::new(),
         }
     }
@@ -117,7 +133,36 @@ impl PgSelectStep {
     /// argument values only knowable at runtime.
     ///
     /// Tweaks are applied in registration order.
+    ///
+    /// An unkeyed tweak makes this step's fingerprint **unique**: the closure
+    /// is opaque, so the optimizer cannot know whether two tweaked steps ask
+    /// the same question, and deduplicating them on the base config alone
+    /// would serve one field's filtered rows to a different field. Prefer
+    /// [`apply_keyed`](Self::apply_keyed) whenever the tweak is a pure
+    /// function of hashable argument values — that keeps deduplication.
     pub fn apply(&mut self, tweak: impl Fn(SqlBuilder) -> SqlBuilder + Send + Sync + 'static) {
+        self.tweaks.push(Box::new(tweak));
+        self.has_unkeyed_tweak = true;
+    }
+
+    /// Register a runtime tweak together with the argument values it was
+    /// built from. The key is hashed into the step's fingerprint, so two
+    /// steps over the same table whose tweaks encode the **same** arguments
+    /// deduplicate into one query, while tweaks encoding **different**
+    /// arguments never collide.
+    ///
+    /// The caller owns the contract that `key` fully determines the tweak's
+    /// effect on the SQL: same key ⇒ same WHERE/ORDER/LIMIT. Registration
+    /// order still matters and is part of the fingerprint (keys are hashed
+    /// in sequence).
+    pub fn apply_keyed<K: Hash>(
+        &mut self,
+        key: K,
+        tweak: impl Fn(SqlBuilder) -> SqlBuilder + Send + Sync + 'static,
+    ) {
+        let mut h = DefaultHasher::new();
+        key.hash(&mut h);
+        self.tweak_keys.push(h.finish());
         self.tweaks.push(Box::new(tweak));
     }
 
@@ -128,14 +173,27 @@ impl PgSelectStep {
         }
     }
 
-    /// Plan-time fingerprint hash: schema + table + selected_cols + fk_col.
-    /// Does NOT include tweaks — tweaks are runtime, not plan-time.
+    /// Plan-time fingerprint hash: schema + table + selected_cols + fk_col,
+    /// plus the tweak discipline:
+    ///
+    /// * **Keyed tweaks** contribute their key hashes in registration order —
+    ///   same table + same tweak arguments ⇒ same hash ⇒ the optimizer merges
+    ///   the two steps into one query; different arguments ⇒ different hash.
+    /// * **Any unkeyed tweak** folds this step's own `id` in, making the
+    ///   fingerprint unique to this step. An opaque closure's effect on the
+    ///   SQL is unknowable here, and the failure mode of guessing wrong is
+    ///   the optimizer serving one field's filtered rows to another field —
+    ///   so an unkeyed step simply never deduplicates.
     fn compute_config_hash(&self) -> u64 {
         let mut h = DefaultHasher::new();
         self.schema.hash(&mut h);
         self.table.hash(&mut h);
         self.selected_cols.hash(&mut h);
         self.fk_col.hash(&mut h);
+        self.tweak_keys.hash(&mut h);
+        if self.has_unkeyed_tweak {
+            self.id.hash(&mut h);
+        }
         h.finish()
     }
 
@@ -409,6 +467,60 @@ mod tests {
         assert!(sql.contains("ORDER BY \"name\" ASC"));
         assert_eq!(params.len(), 1);
         assert_eq!(params[0].as_i64(), Some(10));
+    }
+
+    // ── Tweak fingerprint discipline ─────────────────────────────────────
+    // These four tests are the regression suite for the dedup-unsoundness
+    // class: the optimizer merges steps with equal fingerprints, so a
+    // fingerprint that ignores tweak arguments would let a step filtered
+    // `WHERE book = 'John'` absorb a step filtered `WHERE book = 'Gen'` and
+    // serve John's rows to Genesis's field.
+
+    #[tokio::test]
+    async fn same_keyed_tweak_args_dedupe() {
+        let pool = mock_pool();
+        let mut a = PgSelectStep::new(1, pool.clone(), "public", "users", vec!["id".into()]);
+        let mut b = PgSelectStep::new(2, pool, "public", "users", vec!["id".into()]);
+        a.apply_keyed(("book", "John"), |b| b.limit(10));
+        b.apply_keyed(("book", "John"), |b| b.limit(10));
+        // Same table, same declared arguments → same config hash → the
+        // optimizer may (and should) collapse these into one query.
+        assert_eq!(a.compute_config_hash(), b.compute_config_hash());
+    }
+
+    #[tokio::test]
+    async fn different_keyed_tweak_args_never_collide() {
+        let pool = mock_pool();
+        let mut a = PgSelectStep::new(1, pool.clone(), "public", "users", vec!["id".into()]);
+        let mut b = PgSelectStep::new(2, pool, "public", "users", vec!["id".into()]);
+        a.apply_keyed(("book", "John"), |b| b.limit(10));
+        b.apply_keyed(("book", "Gen"), |b| b.limit(10));
+        assert_ne!(
+            a.compute_config_hash(),
+            b.compute_config_hash(),
+            "steps tweaked with different arguments must never share a fingerprint",
+        );
+    }
+
+    #[tokio::test]
+    async fn unkeyed_tweak_poisons_dedup() {
+        let pool = mock_pool();
+        let mut a = PgSelectStep::new(1, pool.clone(), "public", "users", vec!["id".into()]);
+        let mut b = PgSelectStep::new(2, pool, "public", "users", vec!["id".into()]);
+        // Identical closures — but the fingerprint cannot see inside them,
+        // so each step must be unique rather than assumed equivalent.
+        a.apply(|b| b.limit(10));
+        b.apply(|b| b.limit(10));
+        assert_ne!(a.compute_config_hash(), b.compute_config_hash());
+    }
+
+    #[tokio::test]
+    async fn untweaked_steps_still_dedupe() {
+        let pool = mock_pool();
+        let a = PgSelectStep::new(1, pool.clone(), "public", "users", vec!["id".into()]);
+        let b = PgSelectStep::new(2, pool, "public", "users", vec!["id".into()]);
+        // The baseline behavior the optimizer relies on is preserved.
+        assert_eq!(a.compute_config_hash(), b.compute_config_hash());
     }
 
     #[test]
