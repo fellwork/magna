@@ -12,12 +12,14 @@
 //!   whose deps are resolved. Null/Error/Inhibited flags propagate.
 //!   Unary steps execute once; their result is broadcast.
 
+pub mod batch;
 pub mod step;
 pub mod planner;
 pub mod optimizer;
 pub mod executor;
 pub mod fingerprint;
 
+pub use batch::{BatchLoader, BatchStep, LoadFuture};
 pub use step::{ExecutableStep, StepOutput, StepInputs, ExecutionContext};
 pub use planner::{Planner, ExecutionPlan};
 pub use optimizer::{optimize, OptimizedPlan};
