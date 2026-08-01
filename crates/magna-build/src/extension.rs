@@ -30,6 +30,9 @@
 
 use async_graphql::dynamic::{Field, Object, SchemaBuilder, Type};
 
+use crate::plan_extension::{FieldArgs, PlanRegistry, PlanScope};
+use magna_types::{FwGraphError, StepId};
+
 /// Context passed to a [`SchemaExtension`] hook so it can register types and
 /// add fields. Internals are private — all mutation is via methods.
 ///
@@ -53,6 +56,9 @@ pub struct ExtensionContext<'a> {
     query: Option<&'a mut Object>,
     /// In-progress Mutation root. `Some` only during `extend_mutation`.
     mutation: Option<&'a mut Object>,
+    /// Plan-fn registry for plan-based execution. Available in every phase —
+    /// planning is orthogonal to which root the field hangs from.
+    plan_registry: &'a mut PlanRegistry,
 }
 
 impl<'a> ExtensionContext<'a> {
@@ -113,6 +119,30 @@ impl<'a> ExtensionContext<'a> {
              move type registration to register_types or mutation fields to extend_mutation",
         );
         replace_with(*q, |obj| obj.field(field));
+    }
+
+    /// Register a plan function for `type_name.field_name` — the field's data
+    /// needs, as steps in the operation's shared plan. Available in every
+    /// phase.
+    ///
+    /// When at least one plan fn is registered, `build_schema` attaches the
+    /// plan extension to the schema: per request, the operation's planned
+    /// root fields register their steps into ONE plan, the optimizer
+    /// deduplicates steps with equal fingerprints across fields, the plan
+    /// executes before resolution begins, and each field's resolver reads
+    /// its output from [`crate::PlanResults`] by response key.
+    ///
+    /// The field itself must still be registered (via
+    /// [`query_field`](Self::query_field)) with a resolver that reads
+    /// `ctx.data::<Arc<PlanResults>>()` — planning supplies the data, not
+    /// the schema entry.
+    pub fn plan_field(
+        &mut self,
+        type_name: impl Into<String>,
+        field_name: impl Into<String>,
+        f: impl Fn(&PlanScope<'_>, &FieldArgs) -> Result<StepId, FwGraphError> + Send + Sync + 'static,
+    ) {
+        self.plan_registry.plan_field(type_name, field_name, f);
     }
 
     /// Add a field to the Mutation root. Only valid inside `extend_mutation`.
@@ -230,6 +260,7 @@ pub(crate) fn run_extension_phase(
     builder: SchemaBuilder,
     query: &mut Object,
     mutation: Option<&mut Object>,
+    plan_registry: &mut PlanRegistry,
     extensions: &[Box<dyn SchemaExtension>],
     phase: Phase,
 ) -> SchemaBuilder {
@@ -254,6 +285,7 @@ pub(crate) fn run_extension_phase(
             builder: current_builder.take(),
             query: ctx_query,
             mutation: ctx_mutation,
+            plan_registry: &mut *plan_registry,
         };
 
         match phase {
@@ -292,12 +324,16 @@ mod tests {
         }
     }
 
-    fn fresh_ctx<'a>(query: &'a mut Object) -> ExtensionContext<'a> {
+    fn fresh_ctx<'a>(
+        query: &'a mut Object,
+        plan_registry: &'a mut PlanRegistry,
+    ) -> ExtensionContext<'a> {
         let builder = async_graphql::dynamic::Schema::build("Query", None, None);
         ExtensionContext {
             builder: Some(builder),
             query: Some(query),
             mutation: None,
+            plan_registry,
         }
     }
 
@@ -312,14 +348,17 @@ mod tests {
         let mut query = Object::new("Query");
         // RegisterTypes phase: query/mutation are None.
         let builder = async_graphql::dynamic::Schema::build("Query", None, None);
+        let mut plan_reg = PlanRegistry::default();
         let mut ctx = ExtensionContext {
             builder: Some(builder),
             query: None,
             mutation: None,
+            plan_registry: &mut plan_reg,
         };
         ext.register_types(&mut ctx);
         // ExtendQuery phase: query is Some.
-        let mut ctx2 = fresh_ctx(&mut query);
+        let mut plan_reg2 = PlanRegistry::default();
+        let mut ctx2 = fresh_ctx(&mut query, &mut plan_reg2);
         ext.extend_query(&mut ctx2);
         ext.extend_mutation(&mut ctx2);
     }
@@ -334,10 +373,12 @@ mod tests {
             }
         }
         let builder = async_graphql::dynamic::Schema::build("Query", None, None);
+        let mut plan_reg = PlanRegistry::default();
         let mut ctx = ExtensionContext {
             builder: Some(builder),
             query: None,
             mutation: None,
+            plan_registry: &mut plan_reg,
         };
         TypeAdder.register_types(&mut ctx);
         assert!(ctx.builder.is_some(), "builder should be restored");
@@ -359,7 +400,8 @@ mod tests {
             }
         }
         let mut query = Object::new("Query");
-        let mut ctx = fresh_ctx(&mut query);
+        let mut plan_reg = PlanRegistry::default();
+        let mut ctx = fresh_ctx(&mut query, &mut plan_reg);
         MultiFielder.extend_query(&mut ctx);
         // The placeholder type name must never leak into the result.
         assert_eq!(query.type_name(), "Query");
@@ -369,10 +411,12 @@ mod tests {
     #[should_panic(expected = "outside extend_query phase")]
     fn test_query_field_panics_outside_extend_query() {
         let builder = async_graphql::dynamic::Schema::build("Query", None, None);
+        let mut plan_reg = PlanRegistry::default();
         let mut ctx = ExtensionContext {
             builder: Some(builder),
             query: None,
             mutation: None,
+            plan_registry: &mut plan_reg,
         };
         ctx.query_field(Field::new(
             "x",
@@ -385,10 +429,12 @@ mod tests {
     #[should_panic(expected = "outside extend_mutation phase")]
     fn test_mutation_field_panics_outside_extend_mutation() {
         let builder = async_graphql::dynamic::Schema::build("Query", None, None);
+        let mut plan_reg = PlanRegistry::default();
         let mut ctx = ExtensionContext {
             builder: Some(builder),
             query: None,
             mutation: None,
+            plan_registry: &mut plan_reg,
         };
         ctx.mutation_field(Field::new(
             "x",
@@ -442,7 +488,15 @@ mod tests {
             },
         ));
         let exts: Vec<Box<dyn SchemaExtension>> = vec![Box::new(DataInjector)];
-        let builder = run_extension_phase(builder, &mut query, None, &exts, Phase::RegisterTypes);
+        let mut plan_reg = PlanRegistry::default();
+        let builder = run_extension_phase(
+            builder,
+            &mut query,
+            None,
+            &mut plan_reg,
+            &exts,
+            Phase::RegisterTypes,
+        );
         let schema = builder.register(query).finish().expect("schema must finish");
 
         let res = schema.execute("{ marker }").await;
