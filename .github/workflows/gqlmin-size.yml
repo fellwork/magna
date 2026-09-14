@@ -15,6 +15,9 @@ on:
       - "Cargo.lock"
       - ".github/workflows/gqlmin-size.yml"
 
+permissions:
+  contents: read
+
 jobs:
   gqlmin-size:
     name: wasm size gate (≤ 6500 bytes gz)
