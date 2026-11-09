@@ -15,12 +15,15 @@ on:
       - "Cargo.lock"
       - ".github/workflows/gqlmin-size.yml"
 
+permissions:
+  contents: read
+
 jobs:
   gqlmin-size:
     name: wasm size gate (≤ 6500 bytes gz)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # The wasm size-gate path uses a NIGHTLY toolchain with -Z build-std
       # to dead-strip panic strings, Unicode tables, and format machinery
@@ -28,7 +31,7 @@ jobs:
       # nightly is invoked only here for the size-gate target.
       # See crates/magna-gqlmin/SIZE.md "R7 (Path β ...)" for rationale.
       - name: Install nightly toolchain (for build-std)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@2c76c034f9e32a5d6e2c104dc4df23a22476db04 # nightly HEAD as of 2026-W46 sweep; this action uses branch refs as channel selectors, re-verify periodically
         with:
           targets: wasm32-unknown-unknown
           components: rust-src
